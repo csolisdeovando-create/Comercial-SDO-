@@ -22,6 +22,7 @@ function crearMailer(config) {
 
   return {
     modoPrueba,
+    verificar: () => (modoPrueba ? Promise.resolve(true) : transporte.verify()),
     async enviar(mensaje) {
       const info = await transporte.sendMail({ from, ...mensaje });
       if (modoPrueba) {

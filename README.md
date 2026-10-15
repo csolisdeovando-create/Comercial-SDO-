@@ -83,9 +83,28 @@ y respaldarse, porque contiene información personal de los postulantes.
 
 ### 2. Correo (Google Workspace)
 
-1. En la cuenta `sdopropiedades@sdorent.cl` activar la verificación en 2 pasos.
-2. Crear una **contraseña de aplicación** (Cuenta de Google → Seguridad → Contraseñas de aplicaciones).
-3. En `.env`: `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`, `SMTP_USER=sdopropiedades@sdorent.cl`, `SMTP_PASS=<contraseña de aplicación>`.
+El dominio sdorent.cl usa Google Workspace. **La clave normal de la cuenta no sirve para enviar desde un
+sistema**: Google exige una *contraseña de aplicación*.
+
+1. Entrar a https://myaccount.google.com con `sdopropiedades@sdorent.cl`.
+2. **Seguridad → Verificación en 2 pasos** → activarla (si no lo está).
+3. Ir a https://myaccount.google.com/apppasswords, nombre "SDO Comercial" → **Crear**. Google muestra una clave de
+   16 letras (ej. `abcd efgh ijkl mnop`); se muestra una sola vez.
+   - Si dice "La opción no está disponible", el administrador de Workspace debe permitir la verificación en 2 pasos
+     (admin.google.com → Seguridad → Autenticación).
+4. En `.env`:
+   ```
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=465
+   SMTP_USER=sdopropiedades@sdorent.cl
+   SMTP_PASS=abcdefghijklmnop     # la contraseña de aplicación, sin espacios
+   EMAIL_FROM=SDO Rent <sdopropiedades@sdorent.cl>
+   ```
+5. Probar: `npm run probar-correo` (envía un correo de prueba a sdopropiedades@) o
+   `npm run probar-correo otro@correo.cl`.
+
+La contraseña de aplicación va **solo** en el `.env` del servidor (nunca en GitHub ni por chat). Si se filtra, se
+revoca en la misma página sin afectar la clave normal de la cuenta.
 
 ### 3. WhatsApp Business (Meta Cloud API)
 
