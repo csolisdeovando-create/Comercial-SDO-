@@ -3,12 +3,13 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const express = require('express');
 const multer = require('multer');
+const archiver = require('archiver');
 
-const { REQUISITOS, TIPOS, todosLosCampos } = require('./requisitos');
-const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque } = require('./agenda');
+const { REQUISITOS, TIPOS, todosLosCampos, nombreRequisito } = require('./requisitos');
+const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias } = require('./agenda');
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
-const { esc, rutValido, limpiarRut, normalizarTelefono, emailValido, firmaCorrecta } = require('./utils');
+const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
 
 const MIMES_PERMITIDOS = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif))$/;
@@ -391,7 +392,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   // ------------------------------------------------------------------
   // Panel interno (usuario/clave)
   // ------------------------------------------------------------------
-  app.get('/admin', (req, res) => {
+  function requiereAdmin(req, res, next) {
     if (!config.admin.clave) return res.status(503).send('Configura ADMIN_CLAVE para habilitar el panel.');
     const [tipo, valor] = String(req.get('authorization') || '').split(' ');
     const [u, ...c] = Buffer.from(valor || '', 'base64').toString().split(':');
@@ -402,8 +403,88 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       res.set('WWW-Authenticate', 'Basic realm="SDO Comercial", charset="UTF-8"');
       return res.status(401).send('Autenticación requerida');
     }
-    const hoy = ahoraEnZona(config.zonaHoraria, ahora()).fecha;
-    res.send(vistas.panel({ leads: db.listarLeads(), visitas: db.listarVisitas(hoy), firmaDe: notif.firmaRevision, config }));
+    res.set('Cache-Control', 'no-store');
+    next();
+  }
+  app.use('/admin', requiereAdmin);
+
+  const hoyChile = () => ahoraEnZona(config.zonaHoraria, ahora()).fecha;
+
+  app.get('/admin', (_req, res) => {
+    res.send(vistas.panel({ leads: db.listarLeads(), visitas: db.listarVisitas(hoyChile()), firmaDe: notif.firmaRevision, config }));
+  });
+
+  app.get('/admin/calendario', (req, res) => {
+    const desplazamiento = Math.max(-52, Math.min(52, parseInt(req.query.semana, 10) || 0));
+    const hoy = hoyChile();
+    const lunesActual = sumarDias(hoy, 1 - (new Date(`${hoy}T00:00:00Z`).getUTCDay() || 7));
+    const lunes = sumarDias(lunesActual, desplazamiento * 7);
+    const viernes = sumarDias(lunes, 4);
+    res.send(
+      vistas.calendarioPanel({ lunes, hoy, desplazamiento, visitas: db.visitasEntre(lunes, viernes), proximas: db.listarVisitas(hoy), config })
+    );
+  });
+
+  function leadAdmin(req, res) {
+    const lead = db.leadPorId(Number(req.params.id));
+    if (!lead) res.status(404).send(vistas.mensaje('No encontrado', 'Ese interesado no existe.', { ...opcVista, icono: '🤷' }));
+    return lead;
+  }
+
+  app.get('/admin/lead/:id', (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    res.send(
+      vistas.fichaAdmin({
+        lead,
+        documentos: db.documentosDeLead(lead.id),
+        visita: db.visitaVigente(lead.id),
+        firma: notif.firmaRevision(lead.id),
+        config,
+      })
+    );
+  });
+
+  app.get('/admin/documento/:docId', (req, res) => {
+    const doc = db.documentoPorId(Number(req.params.docId));
+    if (!doc || !fs.existsSync(doc.ruta)) return res.status(404).send('Archivo no encontrado');
+    const modo = req.query.descargar ? 'attachment' : 'inline';
+    res.setHeader('Content-Type', doc.mime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `${modo}; filename*=UTF-8''${encodeURIComponent(doc.nombre_original)}`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    fs.createReadStream(doc.ruta).pipe(res);
+  });
+
+  // Todos los documentos del interesado en un ZIP, ordenados por requisito (para subirlos a Breal)
+  app.get('/admin/lead/:id/documentos.zip', (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    const docs = db.documentosDeLead(lead.id).filter((d) => fs.existsSync(d.ruta));
+    if (!docs.length) return res.status(404).send('Este interesado no tiene documentos.');
+    const base = `${lead.nombre || 'interesado'} ${lead.rut ? formatearRut(lead.rut) : lead.id}`
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z0-9.-]+/g, '_');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${base}.zip"`);
+    const zip = archiver('zip', { zlib: { level: 6 } });
+    zip.on('error', (e) => {
+      console.error('[zip]', e);
+      res.destroy(e);
+    });
+    zip.pipe(res);
+    const usados = new Map();
+    const orden = REQUISITOS[lead.tipo]?.documentos.map((d) => d.campo) || [];
+    for (const d of docs) {
+      const n = orden.indexOf(d.requisito) + 1 || 9;
+      const carpeta = `${n} - ${nombreRequisito(d.requisito).replace(/[\\/:*?"<>|]/g, '-')}`;
+      let nombre = `${carpeta}/${d.nombre_original}`;
+      const repetido = usados.get(nombre) || 0;
+      usados.set(nombre, repetido + 1);
+      if (repetido) nombre = nombre.replace(/(\.[^./]+)?$/, ` (${repetido + 1})$1`);
+      zip.file(d.ruta, { name: nombre });
+    }
+    zip.finalize();
   });
 
   app.use((_req, res) => res.status(404).send(vistas.mensaje('Página no encontrada', 'La página que buscas no existe.', { ...opcVista, icono: '🤷' })));

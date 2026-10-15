@@ -12,11 +12,14 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
   const correoHTML = (titulo, contenido) => `<!doctype html><html><body style="margin:0;background:#f3f5f9;font-family:Arial,Helvetica,sans-serif;color:#1d2433">
     <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
     <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:10px;overflow:hidden">
-      <tr><td style="background:#0b2545;color:#fff;padding:18px 24px;font-size:18px;font-weight:bold">${esc(config.empresa.nombre)} · ${esc(titulo)}</td></tr>
+      <tr><td style="background:#ffffff;padding:16px 24px 12px;border-bottom:3px solid #00c3ca">
+        <img src="${config.baseUrl}/static/logo.png" alt="${esc(config.empresa.nombre)}" width="96" height="49" style="display:block;border:0">
+      </td></tr>
+      <tr><td style="padding:20px 24px 0;font-size:19px;font-weight:bold;color:#111417">${esc(titulo)}</td></tr>
       <tr><td style="padding:24px;font-size:15px;line-height:1.5">${contenido}</td></tr>
     </table></td></tr></table></body></html>`;
 
-  const boton = (texto, url, color = '#13a36e') =>
+  const boton = (texto, url, color = '#00949a') =>
     `<a href="${esc(url)}" style="display:inline-block;background:${color};color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:bold;margin:4px 6px 4px 0">${esc(texto)}</a>`;
 
   const tablaLead = (lead) => {
@@ -84,20 +87,29 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
 
     // 1) Documentos -> sdopropiedades@sdorent.cl (Bárbara)
     async documentosRecibidos(lead, documentos) {
-      const total = documentos.reduce((s, d) => s + (d.tamano || 0), 0);
-      const adjuntar = total <= config.correo.maxAdjuntosMB * 1024 * 1024;
+      // Adjunta los archivos que quepan en el límite del correo; el resto queda como link de descarga
+      const limite = config.correo.maxAdjuntosMB * 1024 * 1024;
+      let acumulado = 0;
+      const adjuntos = new Set();
+      for (const d of [...documentos].sort((a, b) => (a.tamano || 0) - (b.tamano || 0))) {
+        if (acumulado + (d.tamano || 0) > limite) continue;
+        acumulado += d.tamano || 0;
+        adjuntos.add(d);
+      }
+      const sinAdjuntar = documentos.length - adjuntos.size;
       const firma = firmaRevision(lead.id);
       const lista = documentos
         .map(
           (d) =>
-            `<li>${esc(nombreRequisito(d.requisito))}: <a href="${config.baseUrl}/revision/${lead.id}/documento/${d.id}?firma=${firma}">${esc(d.nombre_original)}</a> (${tamanoLegible(d.tamano)})</li>`
+            `<li>${esc(nombreRequisito(d.requisito))}: <a href="${config.baseUrl}/revision/${lead.id}/documento/${d.id}?firma=${firma}">${esc(d.nombre_original)}</a> (${tamanoLegible(d.tamano)})${adjuntos.has(d) ? '' : ' <strong>– descargar desde el link</strong>'}</li>`
         )
         .join('');
       const accion = config.agenda.automatica
         ? '<p>El calendario de visitas ya fue enviado automáticamente al interesado.</p>'
         : `<p>Revisa los documentos y elige una acción. Al aprobar, el interesado recibe <strong>automáticamente</strong> el calendario para agendar su visita.</p>
            ${boton('✅ Aprobar y enviar calendario', `${config.baseUrl}/revision/${lead.id}/aprobar?firma=${firma}`)}
-           ${boton('❌ Rechazar / pedir documentos', `${config.baseUrl}/revision/${lead.id}/rechazar?firma=${firma}`, '#c0392b')}`;
+           ${boton('❌ Rechazar / pedir documentos', `${config.baseUrl}/revision/${lead.id}/rechazar?firma=${firma}`, '#c0392b')}
+           <p style="color:#5a6478;font-size:13px">Los documentos también quedan guardados en el <a href="${config.baseUrl}/admin/lead/${lead.id}">panel comercial</a> (descarga individual o en ZIP).</p>`;
 
       await mailer.enviar({
         to: config.correo.documentos,
@@ -107,16 +119,20 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
           'Nueva postulación',
           `<p>Llegó una nueva postulación con documentos.</p>${tablaLead(lead)}
            <p><strong>Documentos (${documentos.length}):</strong></p><ul>${lista}</ul>
-           ${adjuntar ? '<p style="color:#5a6478">Los documentos van adjuntos en este correo.</p>' : '<p style="color:#5a6478">Los archivos superan el tamaño máximo para adjuntar; descárgalos desde los links.</p>'}
+           <p style="color:#5a6478">${
+             sinAdjuntar === 0
+               ? 'Los documentos van adjuntos en este correo.'
+               : `${sinAdjuntar} archivo(s) no se adjuntaron por superar el tamaño máximo del correo; descárgalos desde los links marcados.`
+           }</p>
            ${accion}`
         ),
-        attachments: adjuntar
-          ? documentos.map((d) => ({
-              filename: `${d.requisito}__${d.nombre_original}`,
-              content: fs.createReadStream(d.ruta),
-              contentType: d.mime,
-            }))
-          : [],
+        attachments: documentos
+          .filter((d) => adjuntos.has(d))
+          .map((d) => ({
+            filename: `${d.requisito}__${d.nombre_original}`,
+            content: fs.createReadStream(d.ruta),
+            contentType: d.mime,
+          })),
       });
 
       await mailer
@@ -200,7 +216,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         html: correoHTML(
           reagendada ? 'Visita reagendada' : 'Nueva visita agendada',
           `<p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>${tablaLead(lead)}
-           <p>${boton('WhatsApp al interesado', `https://wa.me/${lead.telefono}`)} ${boton('Ver panel', `${config.baseUrl}/admin`, '#0b2545')}</p>`
+           <p>${boton('WhatsApp al interesado', `https://wa.me/${lead.telefono}`)} ${boton('Ver ficha y documentos', `${config.baseUrl}/admin/lead/${lead.id}`, '#111417')} ${boton('Calendario', `${config.baseUrl}/admin/calendario`, '#111417')}</p>`
         ),
         icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: ics },
       });
@@ -215,7 +231,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
              <p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
              ${lead.propiedad ? `<p>🏠 ${esc(lead.propiedad)}</p>` : ''}
              <p>Te contactaremos por WhatsApp para coordinar los detalles. Si necesitas cambiar el horario:</p>
-             ${boton('Cambiar horario', linkAgenda(lead), '#0b2545')}`
+             ${boton('Cambiar horario', linkAgenda(lead), '#111417')}`
           ),
           attachments: [adjuntoIcs],
         })

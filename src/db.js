@@ -164,6 +164,15 @@ function crearRepositorio(db) {
         )
         .all(desde),
 
+    visitasEntre: (desde, hasta) =>
+      db
+        .prepare(
+          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.tipo FROM visitas v
+           JOIN leads l ON l.id = v.lead_id WHERE v.estado = 'confirmada' AND v.fecha BETWEEN ? AND ?
+           ORDER BY v.fecha, v.hora`
+        )
+        .all(desde, hasta),
+
     // Devuelve false si el mensaje de WhatsApp ya fue procesado (Meta reintenta webhooks)
     registrarMensaje({ lead_id, wa_id, direccion, contenido }) {
       try {

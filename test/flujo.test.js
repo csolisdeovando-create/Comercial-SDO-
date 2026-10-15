@@ -207,3 +207,71 @@ test('webhook: verificación y firma de Meta', async (t) => {
   assert.strictEqual(ctx.wa.length, 1);
   assert.match(ctx.wa[0].texto, /Yapo/);
 });
+
+test('archivos grandes: se adjunta lo que cabe y el resto va como link', async (t) => {
+  const ctx = await preparar({ EMAIL_MAX_ADJUNTOS_MB: '1' });
+  t.after(() => ctx.server.close());
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(DATOS)) fd.append(k, v);
+  const grande = new Blob([Buffer.alloc(800 * 1024, 1)], { type: 'application/pdf' });
+  const chico = new Blob(['%PDF-1.4'], { type: 'application/pdf' });
+  fd.append('cedula', grande, 'cedula.pdf');
+  fd.append('liquidaciones', grande, 'liq.pdf');
+  fd.append('afp', chico, 'afp.pdf');
+  fd.append('dicom', chico, 'dicom.pdf');
+  const r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: fd });
+  assert.strictEqual(r.status, 200);
+  const correo = ctx.correos.find((c) => [].concat(c.to).includes('sdopropiedades@sdorent.cl'));
+  assert.strictEqual(correo.attachments.length, 3);
+  assert.match(correo.html, /1 archivo\(s\) no se adjuntaron/);
+});
+
+test('el máximo por archivo por defecto es 30 MB', () => {
+  assert.strictEqual(cargarConfig({}).archivos.maxMB, 30);
+});
+
+test('panel: ficha con documentos, ZIP y calendario de visitas', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const auth = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
+  let r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP) });
+  assert.strictEqual(r.status, 200);
+  const lead = ctx.db.leadPorTelefono('56987654321');
+
+  // Sin clave no se accede a nada del panel
+  for (const ruta of [`/admin/lead/${lead.id}`, `/admin/calendario`, `/admin/lead/${lead.id}/documentos.zip`, `/admin/documento/1`]) {
+    assert.strictEqual((await fetch(ctx.url + ruta)).status, 401, ruta);
+  }
+
+  const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: auth })).text();
+  assert.match(ficha, /Descargar todo \(ZIP\)/);
+  assert.match(ficha, /3 últimas liquidaciones de sueldo/);
+  assert.strictEqual((ficha.match(/\/admin\/documento\/\d+\?descargar=1/g) || []).length, 6);
+  assert.match(ficha, /Aprobar y enviar calendario/);
+
+  const doc = ctx.db.documentosDeLead(lead.id)[0];
+  r = await fetch(`${ctx.url}/admin/documento/${doc.id}?descargar=1`, { headers: auth });
+  assert.strictEqual(r.status, 200);
+  assert.match(r.headers.get('content-disposition'), /^attachment/);
+  assert.strictEqual(await r.text(), '%PDF-1.4 prueba');
+
+  r = await fetch(`${ctx.url}/admin/lead/${lead.id}/documentos.zip`, { headers: auth });
+  assert.strictEqual(r.status, 200);
+  assert.match(r.headers.get('content-disposition'), /Juan_Perez_Soto_11.111.111-1\.zip/);
+  const zip = Buffer.from(await r.arrayBuffer());
+  assert.strictEqual(zip.subarray(0, 2).toString(), 'PK');
+  const texto = zip.toString('latin1');
+  assert.ok(texto.includes('1 - Cédula de identidad/'.normalize()) || texto.includes('1 - C'), 'carpeta por requisito');
+  assert.ok(texto.includes('2 - 3 '), 'liquidaciones en carpeta 2');
+  assert.ok(texto.includes('liq1.pdf') && texto.includes('liq3.pdf'));
+
+  // Calendario del panel muestra la visita
+  ctx.db.actualizarLead(lead.id, { estado: 'aprobado' });
+  r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|15' }), redirect: 'manual' });
+  assert.strictEqual(r.status, 303);
+  const cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: auth })).text();
+  assert.match(cal, /1 visita\(s\) esta semana/);
+  assert.match(cal, new RegExp(`href="/admin/lead/${lead.id}"[^>]*>\\s*<strong>Juan Pérez Soto</strong>`));
+  const sig = await (await fetch(`${ctx.url}/admin/calendario?semana=1`, { headers: auth })).text();
+  assert.match(sig, /Sin visitas esta semana/);
+});

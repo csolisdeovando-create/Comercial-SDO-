@@ -80,7 +80,7 @@ function cargarConfig(env = process.env) {
     },
 
     archivos: {
-      maxMB: Number(env.ARCHIVO_MAX_MB || 10),
+      maxMB: Number(env.ARCHIVO_MAX_MB || 30),
       maxPorRequisito: Number(env.ARCHIVO_MAX_POR_REQUISITO || 6),
     },
   };

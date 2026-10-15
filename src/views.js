@@ -1,24 +1,39 @@
 const { esc, formatearRut, tamanoLegible } = require('./utils');
 const { REQUISITOS, nombreRequisito } = require('./requisitos');
-const { fechaLarga, horaTexto, describirBloque } = require('./agenda');
+const { fechaLarga, horaTexto, describirBloque, sumarDias } = require('./agenda');
 
-function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '' } = {}) {
+function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true } = {}) {
+  const menu = nav
+    ? `<nav class="menu">${[
+        ['leads', '/admin', 'Interesados'],
+        ['calendario', '/admin/calendario', 'Calendario de visitas'],
+      ]
+        .map(([k, href, txt]) => `<a href="${href}" class="${nav === k ? 'activo' : ''}">${txt}</a>`)
+        .join('')}</nav>`
+    : '';
   return `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<meta name="theme-color" content="#ffffff">
 <title>${esc(titulo)} · ${esc(empresa)}</title>
+<link rel="icon" type="image/png" href="/static/icono.png">
+<link rel="apple-touch-icon" href="/static/icono.png">
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-<header class="barra"><div class="contenedor ${ancho}"><span class="marca">${esc(empresa)}</span><span class="sub">Área Comercial</span></div></header>
+<header class="barra"><div class="contenedor ${ancho}">
+  <a class="logo" href="${nav ? '/admin' : '#'}"><img src="/static/logo.png" alt="${esc(empresa)}" width="94" height="48"></a>
+  <span class="sub">${nav ? 'Panel comercial' : 'Área Comercial'}</span>
+  ${menu}
+</div></header>
 <main class="contenedor ${ancho}">
 ${cuerpo}
 </main>
-<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación de arriendo.</footer>
-${scripts.map((s) => `<script src="${s}" defer></script>`).join('\n')}
+${pie ? `<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación de arriendo.</footer>` : ''}
+${scripts.map((sc) => `<script src="${sc}" defer></script>`).join('\n')}
 </body>
 </html>`;
 }
@@ -213,7 +228,6 @@ function fichaLead(lead) {
     ${fila('Propiedad', lead.propiedad)}
     ${fila('Origen', lead.portal)}
     ${fila('Comentarios', lead.comentarios)}
-    ${fila('Estado', lead.estado)}
   </table>`;
 }
 
@@ -228,47 +242,189 @@ const ETIQUETAS_ESTADO = {
   cerrado: 'Cerrado',
 };
 
-function panel({ leads, visitas, firmaDe, config }) {
+const opcPanel = (config, nav) => ({ empresa: config.empresa.nombre, ancho: 'ancho', nav, pie: false });
+const linkWhatsapp = (tel) => (tel ? `<a href="https://wa.me/${esc(tel)}" target="_blank">+${esc(tel)}</a>` : '—');
+const bloqueDeVisita = (v) => describirBloque(...v.split(' ').map((x, i) => (i ? Number(x) : x)));
+
+function panel({ leads, visitas, config }) {
+  const conteo = (e) => leads.filter((l) => l.estado === e).length;
+  const resumen = [
+    ['documentos_recibidos', 'Por revisar'],
+    ['aprobado', 'Esperando agenda'],
+    ['agendado', 'Con visita'],
+    ['contactado', 'Sin postular aún'],
+  ];
   return layout(
     'Panel comercial',
-    `<section class="tarjeta">
-      <h1>Próximas visitas</h1>
+    `<section class="resumen-estados">
+      ${resumen.map(([e, t]) => `<div class="cifra ${e}"><strong>${conteo(e)}</strong><span>${t}</span></div>`).join('')}
+    </section>
+    <section class="tarjeta">
+      <div class="titulo-seccion"><h1>Próximas visitas</h1><a class="boton chico" href="/admin/calendario">Ver calendario</a></div>
       ${
         visitas.length
-          ? `<table class="tabla"><thead><tr><th>Fecha</th><th>Hora</th><th>Interesado</th><th>Teléfono</th><th>Propiedad</th></tr></thead><tbody>
+          ? `<div class="tabla-scroll"><table class="tabla"><thead><tr><th>Fecha</th><th>Hora</th><th>Interesado</th><th>Teléfono</th><th>Propiedad</th></tr></thead><tbody>
           ${visitas
+            .slice(0, 8)
             .map(
               (v) =>
-                `<tr><td>${esc(fechaLarga(v.fecha))}</td><td>${horaTexto(v.hora)}</td><td>${esc(v.nombre)}</td><td><a href="https://wa.me/${esc(v.telefono)}">+${esc(v.telefono)}</a></td><td>${esc(v.propiedad)}</td></tr>`
+                `<tr><td>${esc(fechaLarga(v.fecha))}</td><td>${horaTexto(v.hora)}</td><td><a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a></td><td>${linkWhatsapp(v.telefono)}</td><td>${esc(v.propiedad || '—')}</td></tr>`
             )
-            .join('')}</tbody></table>`
-          : '<p>No hay visitas agendadas.</p>'
+            .join('')}</tbody></table></div>`
+          : '<p class="nota">No hay visitas agendadas.</p>'
       }
     </section>
     <section class="tarjeta">
-      <h1>Leads</h1>
-      <table class="tabla"><thead><tr><th>#</th><th>Nombre</th><th>Teléfono</th><th>Origen</th><th>Estado</th><th>Docs</th><th>Acciones</th></tr></thead><tbody>
-      ${leads
-        .map(
-          (l) => `<tr>
+      <h1>Interesados</h1>
+      <div class="tabla-scroll"><table class="tabla"><thead><tr><th>#</th><th>Nombre</th><th>Teléfono</th><th>Origen</th><th>Estado</th><th>Documentos</th><th></th></tr></thead><tbody>
+      ${
+        leads.length
+          ? leads
+              .map(
+                (l) => `<tr>
           <td>${l.id}</td>
-          <td>${esc(l.nombre || '—')}<br><small>${esc(l.email || '')}</small></td>
-          <td>${l.telefono ? `<a href="https://wa.me/${esc(l.telefono)}">+${esc(l.telefono)}</a>` : '—'}</td>
+          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a><br><small>${esc(l.email || '')}</small></td>
+          <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>
-          <td><span class="estado ${esc(l.estado)}">${esc(ETIQUETAS_ESTADO[l.estado] || l.estado)}</span>${l.visita ? `<br><small>${esc(describirBloque(...l.visita.split(' ').map((x, i) => (i ? Number(x) : x))))}</small>` : ''}</td>
-          <td>${l.n_documentos}</td>
-          <td class="acciones">${
-            l.n_documentos
-              ? `<a class="boton chico" href="/revision/${l.id}/aprobar?firma=${firmaDe(l.id)}">Aprobar</a> <a class="boton chico" href="/revision/${l.id}/rechazar?firma=${firmaDe(l.id)}">Rechazar</a>`
-              : ''
-          } <a class="boton chico" href="/postular/${esc(l.token)}" target="_blank">Formulario</a></td>
+          <td><span class="estado ${esc(l.estado)}">${esc(ETIQUETAS_ESTADO[l.estado] || l.estado)}</span>${l.visita ? `<br><small>${esc(bloqueDeVisita(l.visita))}</small>` : ''}</td>
+          <td>${l.n_documentos ? `<a href="/admin/lead/${l.id}#documentos">📎 ${l.n_documentos} archivo(s)</a>` : '<span class="nota">—</span>'}</td>
+          <td class="acciones"><a class="boton chico" href="/admin/lead/${l.id}">Ver ficha</a></td>
         </tr>`
-        )
-        .join('')}
-      </tbody></table>
+              )
+              .join('')
+          : '<tr><td colspan="7" class="nota">Aún no hay interesados.</td></tr>'
+      }
+      </tbody></table></div>
     </section>`,
-    { empresa: config.empresa.nombre, ancho: 'ancho' }
+    opcPanel(config, 'leads')
   );
 }
 
-module.exports = { layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel };
+function fichaAdmin({ lead, documentos, visita, firma, config }) {
+  const requisitos = REQUISITOS[lead.tipo]?.documentos || [];
+  const grupos = requisitos.map((r) => ({ ...r, docs: documentos.filter((d) => d.requisito === r.campo) }));
+  const otros = documentos.filter((d) => !requisitos.some((r) => r.campo === d.requisito));
+  if (otros.length) grupos.push({ campo: 'otros', nombre: 'Otros documentos (postulación anterior)', docs: otros });
+  const tipoArchivo = (d) => (/pdf/.test(d.mime || '') ? 'PDF' : 'IMG');
+  const fecha = (iso) => (iso ? new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z')).toLocaleString('es-CL', { timeZone: config.zonaHoraria, dateStyle: 'medium', timeStyle: 'short' }) : '');
+  const puedeRevisar = ['documentos_recibidos', 'rechazado'].includes(lead.estado) && documentos.length;
+
+  return layout(
+    lead.nombre || 'Interesado',
+    `<p class="migas"><a href="/admin">← Interesados</a></p>
+    <section class="tarjeta">
+      <div class="titulo-seccion">
+        <div><h1>${esc(lead.nombre || 'Sin nombre aún')}</h1>
+        <span class="estado ${esc(lead.estado)}">${esc(ETIQUETAS_ESTADO[lead.estado] || lead.estado)}</span></div>
+        <div class="acciones-ficha">
+          ${lead.telefono ? `<a class="boton chico" href="https://wa.me/${esc(lead.telefono)}" target="_blank">WhatsApp</a>` : ''}
+          ${puedeRevisar ? `<a class="boton chico primario" href="/revision/${lead.id}/aprobar?firma=${esc(firma)}">Aprobar y enviar calendario</a>
+          <a class="boton chico" href="/revision/${lead.id}/rechazar?firma=${esc(firma)}">Rechazar / pedir documentos</a>` : ''}
+        </div>
+      </div>
+      ${visita ? `<div class="alerta ok">📅 Visita agendada: <strong>${esc(describirBloque(visita.fecha, visita.hora))}</strong></div>` : ''}
+      ${lead.motivo_rechazo ? `<div class="alerta error">Motivo informado: ${esc(lead.motivo_rechazo)}</div>` : ''}
+      ${fichaLead(lead)}
+      ${lead.mensaje_inicial ? `<p class="nota">Primer mensaje por WhatsApp: “${esc(lead.mensaje_inicial)}”</p>` : ''}
+    </section>
+
+    <section class="tarjeta" id="documentos">
+      <div class="titulo-seccion">
+        <div><h1>Documentos</h1>${lead.documentos_at ? `<span class="nota">Recibidos el ${esc(fecha(lead.documentos_at))}</span>` : ''}</div>
+        ${documentos.length ? `<a class="boton primario" href="/admin/lead/${lead.id}/documentos.zip">⬇ Descargar todo (ZIP)</a>` : ''}
+      </div>
+      ${
+        documentos.length
+          ? grupos
+              .map(
+                (g, i) => `<div class="grupo-docs">
+            <h3><span class="num">${g.campo === 'otros' ? '·' : i + 1}</span>${esc(g.nombre)}</h3>
+            ${
+              g.docs.length
+                ? `<ul class="archivos">${g.docs
+                    .map(
+                      (d) => `<li>
+                  <span class="tipo-archivo">${tipoArchivo(d)}</span>
+                  <span class="nombre-archivo">${esc(d.nombre_original)} <small>${tamanoLegible(d.tamano)}</small></span>
+                  <a class="boton chico" href="/admin/documento/${d.id}" target="_blank">Ver</a>
+                  <a class="boton chico" href="/admin/documento/${d.id}?descargar=1">Descargar</a>
+                </li>`
+                    )
+                    .join('')}</ul>`
+                : '<p class="falta">No adjuntado</p>'
+            }
+          </div>`
+              )
+              .join('')
+          : '<p class="nota">Este interesado aún no ha subido documentos.</p>'
+      }
+    </section>`,
+    opcPanel(config, 'leads')
+  );
+}
+
+function calendarioPanel({ lunes, hoy, desplazamiento, visitas, proximas, config }) {
+  const dias = [0, 1, 2, 3, 4].map((i) => sumarDias(lunes, i));
+  const enBloque = (f, h) => visitas.filter((v) => v.fecha === f && v.hora === h);
+  const titulo = `${fechaLarga(dias[0]).replace(/^\S+ /, '')} – ${fechaLarga(dias[4]).replace(/^\S+ /, '')}`;
+  const total = visitas.length;
+  return layout(
+    'Calendario de visitas',
+    `<section class="tarjeta">
+      <div class="titulo-seccion">
+        <div><h1>Calendario de visitas</h1><span class="nota">${total ? `${total} visita(s) esta semana` : 'Sin visitas esta semana'}</span></div>
+        <div class="nav-semanas compacto">
+          <a class="boton" href="/admin/calendario?semana=${desplazamiento - 1}" aria-label="Semana anterior">‹</a>
+          <span class="titulo-semana">${esc(titulo)}</span>
+          <a class="boton" href="/admin/calendario?semana=${desplazamiento + 1}" aria-label="Semana siguiente">›</a>
+          ${desplazamiento ? '<a class="boton chico" href="/admin/calendario">Hoy</a>' : ''}
+        </div>
+      </div>
+      <div class="tabla-scroll">
+      <table class="cal-panel">
+        <thead><tr><th></th>${dias
+          .map((f) => {
+            const [nombre, ...resto] = fechaLarga(f).split(' ');
+            const esFeriado = config.agenda.feriados.includes(f);
+            return `<th class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''}"><span>${esc(nombre)}</span><small>${esc(resto.join(' ').replace(' de ', ' '))}${esFeriado ? ' · feriado' : ''}</small></th>`;
+          })
+          .join('')}</tr></thead>
+        <tbody>${config.agenda.horas
+          .map(
+            (h) => `<tr><th class="hora">${horaTexto(h)}</th>${dias
+              .map((f) => {
+                const vs = enBloque(f, h);
+                return `<td class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''}">${vs
+                  .map(
+                    (v) => `<a class="visita" href="/admin/lead/${v.lead_id}">
+                      <strong>${esc(v.nombre)}</strong>
+                      <span>+${esc(v.telefono || '')}</span>
+                      ${v.propiedad ? `<span class="prop">🏠 ${esc(v.propiedad)}</span>` : ''}
+                    </a>`
+                  )
+                  .join('')}</td>`;
+              })
+              .join('')}</tr>`
+          )
+          .join('')}</tbody>
+      </table>
+      </div>
+    </section>
+    <section class="tarjeta">
+      <h1>Próximas visitas</h1>
+      ${
+        proximas.length
+          ? `<ul class="agenda-lista">${proximas
+              .map(
+                (v) => `<li><span class="cuando">${esc(describirBloque(v.fecha, v.hora))}</span>
+                <a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a> · ${linkWhatsapp(v.telefono)}${v.propiedad ? ` · ${esc(v.propiedad)}` : ''}</li>`
+              )
+              .join('')}</ul>`
+          : '<p class="nota">No hay visitas agendadas.</p>'
+      }
+    </section>`,
+    opcPanel(config, 'calendario')
+  );
+}
+
+module.exports = { layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel };
