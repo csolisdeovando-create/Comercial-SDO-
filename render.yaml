@@ -1,0 +1,48 @@
+# Despliegue en Render (https://render.com) — New + → Blueprint → elegir este repositorio.
+# Las claves (sync: false) se escriben en el panel de Render, nunca en este archivo.
+services:
+  - type: web
+    name: sdo-comercial
+    runtime: node
+    plan: starter            # el plan gratis no permite disco persistente
+    region: virginia
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /salud
+    disk:
+      name: datos
+      mountPath: /var/data
+      sizeGB: 2
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATA_DIR
+        value: /var/data
+      - key: BASE_URL
+        sync: false          # ej: https://sdo-comercial.onrender.com o https://comercial.sdorent.cl
+      - key: APP_SECRET
+        generateValue: true
+      - key: ADMIN_USUARIO
+        value: admin
+      - key: ADMIN_CLAVE
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_USER
+        value: sdopropiedades@sdorent.cl
+      - key: SMTP_PASS
+        sync: false          # contraseña de aplicación de Google
+      - key: EMAIL_FROM
+        value: SDO Rent <sdopropiedades@sdorent.cl>
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: AGENDA_AUTOMATICA
+        value: "false"
