@@ -53,6 +53,8 @@ function mensaje(titulo, texto, opciones = {}) {
 
 // ---------- Formulario de postulación ----------
 
+const ACEPTA = '.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,image/*,application/pdf';
+
 function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
   const v = { ...lead, ...valores };
   if (!v.tipo) v.tipo = 'dependiente';
@@ -61,15 +63,33 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
     <fieldset class="docs" data-tipo="${tipo}" ${v.tipo === tipo ? '' : 'hidden'}>
       <legend>Documentos · ${esc(REQUISITOS[tipo].etiqueta)}</legend>
       ${REQUISITOS[tipo].documentos
-        .map(
-          (d, i) => `
+        .map((d, i) => {
+          const activo = v.tipo === tipo;
+          const input = (multiple, requerido) =>
+            `<input type="file" name="${d.campo}" ${multiple ? 'multiple' : ''} accept="${ACEPTA}" ${requerido ? '' : 'data-opcional="1"'} ${activo && requerido ? 'required' : ''}>
+          <span class="seleccion" aria-live="polite">Seleccionar archivo</span>`;
+          if (!d.casillas) {
+            return `
         <label class="archivo">
           <span class="num">${i + 1}</span>
           <span class="texto"><strong>${esc(d.nombre)}</strong><small>${esc(d.ayuda)}</small></span>
-          <input type="file" name="${d.campo}" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,image/*,application/pdf" ${v.tipo === tipo ? 'required' : ''}>
-          <span class="seleccion" aria-live="polite">Seleccionar archivo</span>
-        </label>`
-        )
+          ${input(true, true)}
+        </label>`;
+          }
+          return `
+        <div class="archivo-grupo">
+          <div class="archivo-cab"><span class="num">${i + 1}</span>
+            <span class="texto"><strong>${esc(d.nombre)}</strong><small>${esc(d.ayuda)}</small></span></div>
+          ${d.casillas
+            .map(
+              (c, j) => `<label class="archivo sub">
+            <span class="texto"><strong>${esc(c)}</strong>${j ? '<small>Opcional si ya subiste todas en la primera</small>' : ''}</span>
+            ${input(false, j === 0)}
+          </label>`
+            )
+            .join('')}
+        </div>`;
+        })
         .join('')}
     </fieldset>`;
 
@@ -239,14 +259,23 @@ const ETIQUETAS_ESTADO = {
   aprobado: 'Aprobado (esperando agenda)',
   rechazado: 'Rechazado / faltan docs',
   agendado: 'Visita agendada',
+  visitado: 'Visita realizada',
+  no_asistio: 'No asistió a la visita',
+  no_continua: 'No continúa',
   cerrado: 'Cerrado',
+};
+
+const RESULTADO_VISITA = {
+  realizada: '✅ Visita realizada – continúa',
+  no_asistio: '⚠️ No asistió',
+  no_continua: '❌ No continúa',
 };
 
 const opcPanel = (config, nav) => ({ empresa: config.empresa.nombre, ancho: 'ancho', nav, pie: false });
 const linkWhatsapp = (tel) => (tel ? `<a href="https://wa.me/${esc(tel)}" target="_blank">+${esc(tel)}</a>` : '—');
 const bloqueDeVisita = (v) => describirBloque(...v.split(' ').map((x, i) => (i ? Number(x) : x)));
 
-function panel({ leads, visitas, config }) {
+function panel({ leads, visitas, eliminado, config }) {
   const conteo = (e) => leads.filter((l) => l.estado === e).length;
   const resumen = [
     ['documentos_recibidos', 'Por revisar'],
@@ -256,7 +285,8 @@ function panel({ leads, visitas, config }) {
   ];
   return layout(
     'Panel comercial',
-    `<section class="resumen-estados">
+    `${eliminado ? `<div class="alerta ok">🗑️ Se eliminó a <strong>${esc(eliminado)}</strong> con todos sus documentos.</div>` : ''}
+    <section class="resumen-estados">
       ${resumen.map(([e, t]) => `<div class="cifra ${e}"><strong>${conteo(e)}</strong><span>${t}</span></div>`).join('')}
     </section>
     <section class="tarjeta">
@@ -300,7 +330,7 @@ function panel({ leads, visitas, config }) {
   );
 }
 
-function fichaAdmin({ lead, documentos, visita, firma, config }) {
+function fichaAdmin({ lead, documentos, visita, firma, aviso, config }) {
   const requisitos = REQUISITOS[lead.tipo]?.documentos || [];
   const grupos = requisitos.map((r) => ({ ...r, docs: documentos.filter((d) => d.requisito === r.campo) }));
   const otros = documentos.filter((d) => !requisitos.some((r) => r.campo === d.requisito));
@@ -312,6 +342,7 @@ function fichaAdmin({ lead, documentos, visita, firma, config }) {
   return layout(
     lead.nombre || 'Interesado',
     `<p class="migas"><a href="/admin">← Interesados</a></p>
+    ${aviso ? `<div class="alerta ok">${esc(aviso)}</div>` : ''}
     <section class="tarjeta">
       <div class="titulo-seccion">
         <div><h1>${esc(lead.nombre || 'Sin nombre aún')}</h1>
@@ -322,7 +353,6 @@ function fichaAdmin({ lead, documentos, visita, firma, config }) {
           <a class="boton chico" href="/revision/${lead.id}/rechazar?firma=${esc(firma)}">Rechazar / pedir documentos</a>` : ''}
         </div>
       </div>
-      ${visita ? `<div class="alerta ok">📅 Visita agendada: <strong>${esc(describirBloque(visita.fecha, visita.hora))}</strong></div>` : ''}
       ${lead.motivo_rechazo ? `<div class="alerta error">Motivo informado: ${esc(lead.motivo_rechazo)}</div>` : ''}
       ${fichaLead(lead)}
       ${lead.mensaje_inicial ? `<p class="nota">Primer mensaje por WhatsApp: “${esc(lead.mensaje_inicial)}”</p>` : ''}
@@ -358,6 +388,84 @@ function fichaAdmin({ lead, documentos, visita, firma, config }) {
               .join('')
           : '<p class="nota">Este interesado aún no ha subido documentos.</p>'
       }
+    </section>
+
+    ${seccionVisita(lead, visita)}
+
+    <section class="tarjeta zona-peligro">
+      <div class="titulo-seccion">
+        <div><h2>Eliminar interesado</h2>
+        <p class="nota">Si el interesado no continúa, puedes borrar sus datos, documentos y visitas del sistema. No se puede deshacer.</p></div>
+        <a class="boton peligro" href="/admin/lead/${lead.id}/eliminar">🗑️ Eliminar interesado</a>
+      </div>
+    </section>`,
+    opcPanel(config, 'leads')
+  );
+}
+
+function seccionVisita(lead, visita) {
+  if (!visita) {
+    return `<section class="tarjeta" id="visita"><h1>Visita</h1>
+      <p class="nota">${
+        ['aprobado'].includes(lead.estado)
+          ? 'Aprobado: esperando que el interesado elija un horario en el calendario.'
+          : 'Aún no tiene visita agendada. El calendario se envía al aprobar sus documentos.'
+      }</p></section>`;
+  }
+  const cuando = describirBloque(visita.fecha, visita.hora);
+  if (visita.estado === 'cancelada') {
+    return `<section class="tarjeta" id="visita"><h1>Visita</h1>
+      <p>La visita del <strong>${esc(cuando)}</strong> fue <strong>cancelada</strong>.${lead.estado === 'aprobado' ? ' El interesado puede elegir otro horario con su link.' : ''}</p></section>`;
+  }
+  const opcion = (valor) =>
+    `<label class="opcion-resultado"><input type="radio" name="resultado" value="${valor}" ${visita.resultado === valor ? 'checked' : ''} required><span>${RESULTADO_VISITA[valor]}</span></label>`;
+  return `<section class="tarjeta" id="visita">
+    <div class="titulo-seccion">
+      <div><h1>Visita</h1><p class="cuando-visita">📅 ${esc(cuando)}</p>
+      ${lead.propiedad ? `<p class="nota">🏠 ${esc(lead.propiedad)}</p>` : ''}</div>
+      ${visita.resultado ? `<span class="estado ${visita.resultado === 'realizada' ? 'agendado' : visita.resultado === 'no_continua' ? 'rechazado' : 'documentos_recibidos'}">${RESULTADO_VISITA[visita.resultado]}</span>` : '<span class="estado aprobado">Pendiente</span>'}
+    </div>
+    <form method="post" action="/admin/lead/${lead.id}/visita" class="form-visita">
+      <fieldset>
+        <legend>¿Cómo fue la visita?</legend>
+        <div class="opciones-resultado">${opcion('realizada')}${opcion('no_asistio')}${opcion('no_continua')}</div>
+      </fieldset>
+      <label for="notas-visita">Notas de la visita (opcional)</label>
+      <textarea id="notas-visita" name="notas" rows="3" placeholder="Ej: le gustó, pide ver contrato; o: busca algo más grande.">${esc(visita.notas || '')}</textarea>
+      <div class="acciones-ficha"><button class="boton primario">Guardar resultado</button></div>
+    </form>
+    ${
+      visita.resultado
+        ? ''
+        : `<form method="post" action="/admin/lead/${lead.id}/visita/cancelar" class="form-cancelar">
+      <label class="check"><input type="checkbox" name="avisar" value="1" checked> Avisar al interesado (correo y WhatsApp) para que elija otro horario</label>
+      <button class="boton">Cancelar esta visita</button>
+    </form>`
+    }
+    ${visita.resultado === 'no_continua' ? `<div class="alerta error">Este interesado no continúa. Si ya no necesitas sus datos, puedes <a href="/admin/lead/${lead.id}/eliminar">eliminarlo</a>.</div>` : ''}
+  </section>`;
+}
+
+function confirmarEliminar({ lead, documentos, visita, config }) {
+  return layout(
+    'Eliminar interesado',
+    `<p class="migas"><a href="/admin/lead/${lead.id}">← Volver a la ficha</a></p>
+    <section class="tarjeta zona-peligro">
+      <h1>¿Eliminar a ${esc(lead.nombre || 'este interesado')}?</h1>
+      <p>Se borrarán del sistema de forma permanente:</p>
+      <ul>
+        <li>Sus datos (${esc(lead.email || 'sin correo')}${lead.telefono ? `, +${esc(lead.telefono)}` : ''})</li>
+        <li>${documentos.length} documento(s) subido(s)</li>
+        <li>Su historial de visitas${visita ? ` (incluida la visita del ${esc(describirBloque(visita.fecha, visita.hora))}, cuyo horario quedará libre)` : ''}</li>
+      </ul>
+      <p class="nota">Los correos que ya llegaron a las casillas del equipo no se borran. Si necesitas los documentos, <a href="/admin/lead/${lead.id}/documentos.zip">descárgalos antes</a>.</p>
+      <form method="post" action="/admin/lead/${lead.id}/eliminar">
+        <label class="check"><input type="checkbox" name="confirmo" value="1" required> Confirmo que quiero eliminar a este interesado y sus documentos</label>
+        <div class="acciones-ficha">
+          <button class="boton peligro">Eliminar definitivamente</button>
+          <a class="boton" href="/admin/lead/${lead.id}">Cancelar</a>
+        </div>
+      </form>
     </section>`,
     opcPanel(config, 'leads')
   );
@@ -400,6 +508,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, proximas, config
                       <strong>${esc(v.nombre)}</strong>
                       <span>+${esc(v.telefono || '')}</span>
                       ${v.propiedad ? `<span class="prop">🏠 ${esc(v.propiedad)}</span>` : ''}
+                      ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : ''}
                     </a>`
                   )
                   .join('')}</td>`;
@@ -427,4 +536,4 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, proximas, config
   );
 }
 
-module.exports = { layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel };
+module.exports = { layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, confirmarEliminar };

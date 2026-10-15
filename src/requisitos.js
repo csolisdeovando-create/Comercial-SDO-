@@ -4,7 +4,7 @@ const REQUISITOS = {
     etiqueta: 'Trabajador dependiente',
     documentos: [
       { campo: 'cedula', nombre: 'Cédula de identidad', ayuda: 'Ambos lados (foto o PDF).' },
-      { campo: 'liquidaciones', nombre: '3 últimas liquidaciones de sueldo', ayuda: 'Puedes subir varios archivos.' },
+      { campo: 'liquidaciones', nombre: '3 últimas liquidaciones de sueldo', ayuda: 'Una liquidación por casilla. Si las tienes en un solo PDF, súbelo en la primera.', casillas: ['Liquidación 1 (la más reciente)', 'Liquidación 2', 'Liquidación 3'] },
       { campo: 'afp', nombre: 'Certificado de cotizaciones (AFP)', ayuda: 'Últimos 12 meses idealmente.' },
       { campo: 'dicom', nombre: 'Certificado Dicom u otro reporte de deuda', ayuda: 'Ej: Dicom Equifax o informe de deuda CMF.' },
     ],

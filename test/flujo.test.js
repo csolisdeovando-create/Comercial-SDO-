@@ -275,3 +275,79 @@ test('panel: ficha con documentos, ZIP y calendario de visitas', async (t) => {
   const sig = await (await fetch(`${ctx.url}/admin/calendario?semana=1`, { headers: auth })).text();
   assert.match(sig, /Sin visitas esta semana/);
 });
+
+test('formulario: liquidaciones en 3 casillas (solo la primera obligatoria)', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const html = await (await fetch(`${ctx.url}/postular`)).text();
+  assert.match(html, /Liquidación 1 \(la más reciente\)/);
+  assert.match(html, /Liquidación 2/);
+  assert.match(html, /Liquidación 3/);
+  assert.strictEqual((html.match(/name="liquidaciones"/g) || []).length, 3);
+  assert.strictEqual((html.match(/name="liquidaciones"\s+accept="[^"]+"\s+data-opcional/g) || []).length, 2);
+  // Con una sola liquidación (PDF con las 3) también se acepta
+  const r = await fetch(`${ctx.url}/postular`, {
+    method: 'POST',
+    body: formulario(DATOS, [['cedula', 'c.pdf'], ['liquidaciones', 'las3.pdf'], ['afp', 'a.pdf'], ['dicom', 'd.pdf']]),
+  });
+  assert.strictEqual(r.status, 200);
+});
+
+test('panel: resultado de visita, cancelar y eliminar interesado', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const post = (ruta, datos = {}, extra = {}) =>
+    fetch(ctx.url + ruta, { method: 'POST', headers: { ...h, ...extra }, body: new URLSearchParams(datos), redirect: 'manual' });
+
+  await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP) });
+  let lead = ctx.db.leadPorTelefono('56987654321');
+  ctx.db.actualizarLead(lead.id, { estado: 'aprobado' });
+  await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|9' }) });
+
+  let ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /¿Cómo fue la visita\?/);
+  assert.match(ficha, /Viernes 16 de octubre a las 09:00 hrs/);
+
+  // Desde otro sitio no se puede ejecutar acciones
+  assert.strictEqual((await post(`/admin/lead/${lead.id}/eliminar`, { confirmo: '1' }, { origin: 'https://otro-sitio.com' })).status, 403);
+
+  // Cancelar con aviso -> libera el horario y avisa al interesado
+  let r = await post(`/admin/lead/${lead.id}/visita/cancelar`, { avisar: '1' });
+  assert.strictEqual(r.status, 303);
+  assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'aprobado');
+  assert.ok(ctx.correos.some((c) => c.to === 'juan@example.com' && /fue cancelada/.test(c.subject)));
+  assert.match(ctx.wa.at(-1).texto, /cancelar tu visita/);
+  assert.strictEqual(ctx.db.contarBloque('2026-10-16', 9), 0);
+
+  // Reagenda y se registra el resultado
+  await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|11' }) });
+  r = await post(`/admin/lead/${lead.id}/visita`, { resultado: 'no_continua', notas: 'Busca algo más grande' });
+  assert.strictEqual(r.status, 303);
+  assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'no_continua');
+  ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}?ok=resultado`, { headers: h })).text();
+  assert.match(ficha, /Resultado de la visita guardado/);
+  assert.match(ficha, /Busca algo más grande/);
+  assert.match(ficha, /Este interesado no continúa/);
+
+  // Eliminar: pide confirmación y borra datos y archivos
+  const carpeta = path.join(ctx.config.uploadsDir, String(lead.id));
+  assert.ok(fs.existsSync(carpeta));
+  assert.match(await (await fetch(`${ctx.url}/admin/lead/${lead.id}/eliminar`, { headers: h })).text(), /6 documento\(s\)/);
+  r = await post(`/admin/lead/${lead.id}/eliminar`, {});
+  assert.strictEqual(r.status, 303);
+  assert.ok(ctx.db.leadPorId(lead.id), 'sin confirmar no borra');
+  r = await post(`/admin/lead/${lead.id}/eliminar`, { confirmo: '1' });
+  assert.strictEqual(r.status, 303);
+  assert.match(r.headers.get('location'), /eliminado=Juan/);
+  assert.strictEqual(ctx.db.leadPorId(lead.id), undefined);
+  assert.strictEqual(ctx.db.documentosDeLead(lead.id).length, 0);
+  assert.strictEqual(ctx.db.contarBloque('2026-10-16', 11), 0);
+  assert.ok(!fs.existsSync(carpeta));
+  const panel = await (await fetch(`${ctx.url}/admin?eliminado=Juan%20P%C3%A9rez%20Soto`, { headers: h })).text();
+  assert.match(panel, /Se eliminó a <strong>Juan Pérez Soto/);
+
+  // Si vuelve a escribir por WhatsApp después de "no continúa", parte como interesado nuevo
+  await postWebhook(ctx, mensajeWA('wamid.x', '56987654321', 'Hola de nuevo'));
+  assert.match(ctx.wa.at(-1).texto, /\/postular\//);
+});

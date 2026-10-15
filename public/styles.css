@@ -170,3 +170,28 @@ a { color: var(--verde-texto); }
 .nav-semanas.compacto .titulo-semana { text-transform: none; }
 .cal-panel thead th:first-child { width: 56px; }
 main { padding-top: 24px; }
+
+/* Requisito con varias casillas (liquidaciones) */
+.archivo-grupo { border: 1px dashed var(--borde); border-radius: 10px; padding: 12px; margin-bottom: 12px; display: grid; gap: 8px; }
+.archivo-cab { display: grid; grid-template-columns: 32px 1fr; gap: 4px 12px; align-items: center; font-size: 14px; }
+.archivo-cab .num { width: 32px; height: 32px; border-radius: 50%; background: var(--azul); color: #fff; display: grid; place-items: center; font-weight: 700; }
+.archivo-cab .texto small { display: block; font-weight: 400; color: var(--suave); }
+.archivo.sub { grid-template-columns: 1fr; margin: 0 0 0 44px; padding: 10px 12px; }
+.archivo.sub .seleccion { grid-column: 1; }
+@media (max-width: 480px) { .archivo.sub { margin-left: 0; } }
+
+/* Visita y eliminar */
+.cuando-visita { font-size: 18px; font-weight: 700; margin: 4px 0; }
+.opciones-resultado { display: flex; gap: 8px; flex-wrap: wrap; }
+.opcion-resultado { margin: 0; cursor: pointer; }
+.opcion-resultado input { position: absolute; opacity: 0; }
+.opcion-resultado span { display: block; padding: 10px 14px; border: 2px solid var(--borde); border-radius: 10px; font-weight: 600; }
+.opcion-resultado input:checked + span { border-color: var(--verde); background: var(--verde-claro); }
+.opcion-resultado input:focus-visible + span { outline: 2px solid var(--azul-2); }
+.form-visita textarea { margin-bottom: 12px; }
+.form-cancelar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--borde); margin-top: 16px; padding-top: 14px; }
+.form-cancelar .check { margin: 0; flex: 1; min-width: 220px; }
+.zona-peligro { border: 1px solid #f0c9c4; }
+.zona-peligro h2 { margin: 0 0 4px; color: var(--rojo); }
+.zona-peligro h1 { color: var(--rojo); }
+.visita .res { font-weight: 600; color: var(--azul); }

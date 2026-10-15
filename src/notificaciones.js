@@ -193,6 +193,27 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       );
     },
 
+    async visitaCancelada(lead, visita) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      const link = linkAgenda(lead);
+      await mailer
+        .enviar({
+          to: lead.email,
+          subject: `Tu visita del ${cuando} fue cancelada – ${config.empresa.nombre}`,
+          html: correoHTML(
+            'Visita cancelada',
+            `<p>Hola ${esc(primerNombre(lead))},</p><p>Tuvimos que cancelar tu visita del <strong>${esc(cuando)}</strong>. Disculpa las molestias.</p>
+             <p>Puedes elegir un nuevo horario aquí:</p>${boton('📅 Elegir nuevo horario', link)}`
+          ),
+        })
+        .catch((e) => console.error('[correo] aviso de cancelación falló:', e.message));
+      await enviarWhatsappSeguro(
+        lead,
+        `Hola ${primerNombre(lead)}, tuvimos que cancelar tu visita del *${cuando}*. Disculpa las molestias 🙏 Puedes elegir un nuevo horario aquí: ${link}`,
+        [primerNombre(lead) || 'cliente', link]
+      );
+    },
+
     // 3) Visita agendada -> Julio, Bárbara y C. Solís de Ovando + confirmación al interesado
     async visitaAgendada(lead, visita, reagendada = false) {
       const cuando = describirBloque(visita.fecha, visita.hora);

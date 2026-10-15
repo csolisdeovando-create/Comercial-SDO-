@@ -64,7 +64,17 @@ function abrirDB(archivo) {
   const db = new DatabaseSync(archivo);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(ESQUEMA);
+  migrar(db);
   return crearRepositorio(db);
+}
+
+// Agrega columnas nuevas a bases ya existentes (sin perder datos)
+function migrar(db) {
+  const columnas = (tabla) => db.prepare(`PRAGMA table_info(${tabla})`).all().map((c) => c.name);
+  const visitas = columnas('visitas');
+  if (!visitas.includes('resultado')) db.exec('ALTER TABLE visitas ADD COLUMN resultado TEXT');
+  if (!visitas.includes('notas')) db.exec('ALTER TABLE visitas ADD COLUMN notas TEXT');
+  if (!visitas.includes('resultado_at')) db.exec('ALTER TABLE visitas ADD COLUMN resultado_at TEXT');
 }
 
 function crearRepositorio(db) {
@@ -172,6 +182,26 @@ function crearRepositorio(db) {
            ORDER BY v.fecha, v.hora`
         )
         .all(desde, hasta),
+
+    ultimaVisita: (leadId) =>
+      db.prepare(`SELECT * FROM visitas WHERE lead_id = ? AND estado IN ('confirmada', 'cancelada') ORDER BY id DESC LIMIT 1`).get(leadId),
+    registrarResultadoVisita: (visitaId, resultado, notas) =>
+      db
+        .prepare(`UPDATE visitas SET resultado = ?, notas = ?, resultado_at = datetime('now') WHERE id = ?`)
+        .run(resultado, notas || null, visitaId),
+    cancelarVisita: (visitaId) => db.prepare(`UPDATE visitas SET estado = 'cancelada' WHERE id = ?`).run(visitaId),
+
+    // Elimina al interesado con todo su historial; devuelve las rutas de sus archivos para borrarlos del disco
+    eliminarLead(leadId) {
+      return repo.transaccion(() => {
+        const rutas = db.prepare('SELECT ruta FROM documentos WHERE lead_id = ?').all(leadId).map((d) => d.ruta);
+        db.prepare('DELETE FROM documentos WHERE lead_id = ?').run(leadId);
+        db.prepare('DELETE FROM visitas WHERE lead_id = ?').run(leadId);
+        db.prepare('DELETE FROM mensajes WHERE lead_id = ?').run(leadId);
+        db.prepare('DELETE FROM leads WHERE id = ?').run(leadId);
+        return rutas;
+      });
+    },
 
     // Devuelve false si el mensaje de WhatsApp ya fue procesado (Meta reintenta webhooks)
     registrarMensaje({ lead_id, wa_id, direccion, contenido }) {

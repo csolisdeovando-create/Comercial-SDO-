@@ -75,6 +75,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       msg.text?.body || msg.button?.text || msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || msg.image?.caption || '';
 
     let lead = db.leadPorTelefono(telefono);
+    if (lead && ['no_continua', 'cerrado'].includes(lead.estado)) lead = null;
     const portal = detectarPortal(texto);
     const propiedad = extraerUrl(texto) || (portal ? texto.slice(0, 300) : null);
     if (!lead) {
@@ -135,7 +136,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   }
 
   function mostrarFormulario(req, res, lead) {
-    if (lead && ['aprobado', 'agendado'].includes(lead.estado)) return res.redirect(`/agendar/${lead.token}`);
+    if (lead && ['aprobado', 'agendado', 'no_asistio'].includes(lead.estado)) return res.redirect(`/agendar/${lead.token}`);
     if (lead && lead.estado === 'documentos_recibidos') {
       return res.send(
         vistas.mensaje('Documentos en revisión', 'Ya recibimos tus documentos y nuestro equipo los está revisando. Te avisaremos por correo y WhatsApp.', { ...opcVista, icono: '⏳' })
@@ -319,7 +320,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   // ------------------------------------------------------------------
   // Agenda de visitas
   // ------------------------------------------------------------------
-  const puedeAgendar = (lead) => ['aprobado', 'agendado'].includes(lead.estado);
+  const puedeAgendar = (lead) => ['aprobado', 'agendado', 'no_asistio'].includes(lead.estado);
 
   function mostrarCalendario(res, lead, error, status = 200) {
     const cal = construirCalendario(cfgAgenda, new Map(), ahora());
@@ -404,14 +405,24 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       return res.status(401).send('Autenticación requerida');
     }
     res.set('Cache-Control', 'no-store');
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      // Las acciones del panel solo se aceptan desde el propio panel (evita que otra página las dispare)
+      const origen = req.get('origin') || req.get('referer') || '';
+      let hostOrigen = '';
+      try {
+        hostOrigen = new URL(origen).host;
+      } catch {}
+      if (hostOrigen !== req.get('host')) return res.status(403).send('Acción no permitida desde otro sitio.');
+    }
     next();
   }
   app.use('/admin', requiereAdmin);
 
   const hoyChile = () => ahoraEnZona(config.zonaHoraria, ahora()).fecha;
 
-  app.get('/admin', (_req, res) => {
-    res.send(vistas.panel({ leads: db.listarLeads(), visitas: db.listarVisitas(hoyChile()), firmaDe: notif.firmaRevision, config }));
+  app.get('/admin', (req, res) => {
+    const eliminado = req.query.eliminado ? String(req.query.eliminado).slice(0, 150) : null;
+    res.send(vistas.panel({ leads: db.listarLeads(), visitas: db.listarVisitas(hoyChile()), eliminado, config }));
   });
 
   app.get('/admin/calendario', (req, res) => {
@@ -438,8 +449,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       vistas.fichaAdmin({
         lead,
         documentos: db.documentosDeLead(lead.id),
-        visita: db.visitaVigente(lead.id),
+        visita: db.ultimaVisita(lead.id),
         firma: notif.firmaRevision(lead.id),
+        aviso: AVISOS[req.query.ok] || null,
         config,
       })
     );
@@ -485,6 +497,54 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       zip.file(d.ruta, { name: nombre });
     }
     zip.finalize();
+  });
+
+
+  const AVISOS = {
+    resultado: 'Resultado de la visita guardado.',
+    cancelada: 'Visita cancelada. El horario quedó libre.',
+    cancelada_aviso: 'Visita cancelada. Le enviamos al interesado el link para elegir otro horario.',
+  };
+  const RESULTADOS = { realizada: 'visitado', no_asistio: 'no_asistio', no_continua: 'no_continua' };
+  const formAdmin = express.urlencoded({ extended: false });
+
+  app.post('/admin/lead/:id/visita', formAdmin, (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    const resultado = String(req.body?.resultado || '');
+    const visita = db.ultimaVisita(lead.id);
+    if (!RESULTADOS[resultado] || !visita || visita.estado !== 'confirmada') return res.redirect(303, `/admin/lead/${lead.id}#visita`);
+    db.registrarResultadoVisita(visita.id, resultado, String(req.body?.notas || '').trim().slice(0, 2000));
+    db.actualizarLead(lead.id, { estado: RESULTADOS[resultado] });
+    res.redirect(303, `/admin/lead/${lead.id}?ok=resultado#visita`);
+  });
+
+  app.post('/admin/lead/:id/visita/cancelar', formAdmin, async (req, res) => {
+    let lead = leadAdmin(req, res);
+    if (!lead) return;
+    const visita = db.visitaVigente(lead.id);
+    if (!visita) return res.redirect(303, `/admin/lead/${lead.id}#visita`);
+    db.cancelarVisita(visita.id);
+    lead = db.actualizarLead(lead.id, { estado: 'aprobado' });
+    const avisar = Boolean(req.body?.avisar);
+    if (avisar) await notif.visitaCancelada(lead, visita).catch((e) => console.error('[panel] aviso cancelación:', e));
+    res.redirect(303, `/admin/lead/${lead.id}?ok=${avisar ? 'cancelada_aviso' : 'cancelada'}#visita`);
+  });
+
+  app.get('/admin/lead/:id/eliminar', (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    res.send(vistas.confirmarEliminar({ lead, documentos: db.documentosDeLead(lead.id), visita: db.visitaVigente(lead.id), config }));
+  });
+
+  app.post('/admin/lead/:id/eliminar', formAdmin, (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    if (!req.body?.confirmo) return res.redirect(303, `/admin/lead/${lead.id}/eliminar`);
+    const rutas = db.eliminarLead(lead.id);
+    for (const r of rutas) fs.rmSync(r, { force: true });
+    fs.rmSync(path.join(config.uploadsDir, String(lead.id)), { recursive: true, force: true });
+    res.redirect(303, `/admin?eliminado=${encodeURIComponent(lead.nombre || `#${lead.id}`)}`);
   });
 
   app.use((_req, res) => res.status(404).send(vistas.mensaje('Página no encontrada', 'La página que buscas no existe.', { ...opcVista, icono: '🤷' })));

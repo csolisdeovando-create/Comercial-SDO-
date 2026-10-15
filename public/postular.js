@@ -9,7 +9,7 @@
     form.querySelectorAll('fieldset.docs').forEach(function (fs) {
       var activo = fs.dataset.tipo === tipo;
       fs.hidden = !activo;
-      fs.querySelectorAll('input[type=file]').forEach(function (i) { i.required = activo; });
+      fs.querySelectorAll('input[type=file]').forEach(function (i) { i.required = activo && !i.dataset.opcional; });
     });
     form.querySelectorAll('.solo-empresa').forEach(function (el) { el.hidden = tipo !== 'independiente'; });
   }
