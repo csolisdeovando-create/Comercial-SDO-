@@ -1,0 +1,186 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { DatabaseSync } = require('node:sqlite');
+
+const ESQUEMA = `
+CREATE TABLE IF NOT EXISTS leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  telefono TEXT,
+  nombre TEXT,
+  email TEXT,
+  rut TEXT,
+  tipo TEXT,
+  razon_social TEXT,
+  rut_empresa TEXT,
+  propiedad TEXT,
+  portal TEXT,
+  mensaje_inicial TEXT,
+  comentarios TEXT,
+  estado TEXT NOT NULL DEFAULT 'contactado',
+  motivo_rechazo TEXT,
+  ultimo_autoreply_at TEXT,
+  documentos_at TEXT,
+  aprobado_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_leads_telefono ON leads(telefono);
+
+CREATE TABLE IF NOT EXISTS documentos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL REFERENCES leads(id),
+  requisito TEXT NOT NULL,
+  nombre_original TEXT NOT NULL,
+  ruta TEXT NOT NULL,
+  mime TEXT,
+  tamano INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS visitas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL REFERENCES leads(id),
+  fecha TEXT NOT NULL,
+  hora INTEGER NOT NULL,
+  estado TEXT NOT NULL DEFAULT 'confirmada',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_visitas_bloque ON visitas(fecha, hora, estado);
+
+CREATE TABLE IF NOT EXISTS mensajes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER REFERENCES leads(id),
+  wa_id TEXT UNIQUE,
+  direccion TEXT NOT NULL,
+  contenido TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
+function abrirDB(archivo) {
+  if (archivo !== ':memory:') fs.mkdirSync(path.dirname(archivo), { recursive: true });
+  const db = new DatabaseSync(archivo);
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  db.exec(ESQUEMA);
+  return crearRepositorio(db);
+}
+
+function crearRepositorio(db) {
+  const nuevoToken = () => crypto.randomBytes(18).toString('base64url');
+
+  const repo = {
+    db,
+
+    transaccion(fn) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const r = fn();
+        db.exec('COMMIT');
+        return r;
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    },
+
+    crearLead(datos = {}) {
+      const campos = { token: nuevoToken(), ...datos };
+      const cols = Object.keys(campos);
+      const r = db
+        .prepare(`INSERT INTO leads (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`)
+        .run(...cols.map((c) => campos[c] ?? null));
+      return repo.leadPorId(Number(r.lastInsertRowid));
+    },
+
+    actualizarLead(id, cambios) {
+      const cols = Object.keys(cambios);
+      if (!cols.length) return repo.leadPorId(id);
+      db.prepare(
+        `UPDATE leads SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`
+      ).run(...cols.map((c) => cambios[c] ?? null), id);
+      return repo.leadPorId(id);
+    },
+
+    leadPorId: (id) => db.prepare('SELECT * FROM leads WHERE id = ?').get(id),
+    leadPorToken: (token) => db.prepare('SELECT * FROM leads WHERE token = ?').get(String(token)),
+    leadPorTelefono: (tel) =>
+      db.prepare('SELECT * FROM leads WHERE telefono = ? ORDER BY id DESC LIMIT 1').get(tel),
+
+    listarLeads: (limite = 200) =>
+      db
+        .prepare(
+          `SELECT l.*, (SELECT COUNT(*) FROM documentos d WHERE d.lead_id = l.id) AS n_documentos,
+             (SELECT fecha || ' ' || hora FROM visitas v WHERE v.lead_id = l.id AND v.estado = 'confirmada'
+              ORDER BY v.id DESC LIMIT 1) AS visita
+           FROM leads l ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`
+        )
+        .all(limite),
+
+    agregarDocumento(doc) {
+      const r = db
+        .prepare(
+          'INSERT INTO documentos (lead_id, requisito, nombre_original, ruta, mime, tamano) VALUES (?,?,?,?,?,?)'
+        )
+        .run(doc.lead_id, doc.requisito, doc.nombre_original, doc.ruta, doc.mime, doc.tamano);
+      return Number(r.lastInsertRowid);
+    },
+    documentosDeLead: (leadId) =>
+      db.prepare('SELECT * FROM documentos WHERE lead_id = ? ORDER BY id').all(leadId),
+    documentoPorId: (id) => db.prepare('SELECT * FROM documentos WHERE id = ?').get(id),
+
+    ocupacionBloques(desde, hasta) {
+      const filas = db
+        .prepare(
+          `SELECT fecha, hora, COUNT(*) AS n FROM visitas
+           WHERE estado = 'confirmada' AND fecha BETWEEN ? AND ? GROUP BY fecha, hora`
+        )
+        .all(desde, hasta);
+      const mapa = new Map();
+      for (const f of filas) mapa.set(`${f.fecha} ${f.hora}`, f.n);
+      return mapa;
+    },
+    visitaVigente: (leadId) =>
+      db
+        .prepare(`SELECT * FROM visitas WHERE lead_id = ? AND estado = 'confirmada' ORDER BY id DESC LIMIT 1`)
+        .get(leadId),
+    contarBloque: (fecha, hora) =>
+      db
+        .prepare(`SELECT COUNT(*) AS n FROM visitas WHERE estado = 'confirmada' AND fecha = ? AND hora = ?`)
+        .get(fecha, hora).n,
+    cancelarVisitasDeLead: (leadId) =>
+      db.prepare(`UPDATE visitas SET estado = 'reagendada' WHERE lead_id = ? AND estado = 'confirmada'`).run(leadId),
+    crearVisita(leadId, fecha, hora) {
+      const r = db.prepare('INSERT INTO visitas (lead_id, fecha, hora) VALUES (?,?,?)').run(leadId, fecha, hora);
+      return db.prepare('SELECT * FROM visitas WHERE id = ?').get(Number(r.lastInsertRowid));
+    },
+    listarVisitas: (desde) =>
+      db
+        .prepare(
+          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.tipo FROM visitas v
+           JOIN leads l ON l.id = v.lead_id WHERE v.estado = 'confirmada' AND v.fecha >= ?
+           ORDER BY v.fecha, v.hora`
+        )
+        .all(desde),
+
+    // Devuelve false si el mensaje de WhatsApp ya fue procesado (Meta reintenta webhooks)
+    registrarMensaje({ lead_id, wa_id, direccion, contenido }) {
+      try {
+        db.prepare('INSERT INTO mensajes (lead_id, wa_id, direccion, contenido) VALUES (?,?,?,?)').run(
+          lead_id ?? null,
+          wa_id ?? null,
+          direccion,
+          contenido ?? null
+        );
+        return true;
+      } catch (e) {
+        if (String(e.message).includes('UNIQUE')) return false;
+        throw e;
+      }
+    },
+  };
+  return repo;
+}
+
+module.exports = { abrirDB };
