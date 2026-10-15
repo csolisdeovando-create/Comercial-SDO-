@@ -195,3 +195,12 @@ main { padding-top: 24px; }
 .zona-peligro h2 { margin: 0 0 4px; color: var(--rojo); }
 .zona-peligro h1 { color: var(--rojo); }
 .visita .res { font-weight: 600; color: var(--azul); }
+
+/* Vista previa de la publicación */
+.vista-publicacion { margin: -4px 0 14px; padding: 10px 12px; border-radius: 8px; font-size: 14px; background: var(--fondo); }
+.vista-publicacion strong { display: block; }
+.vista-publicacion span { color: var(--suave); font-size: 13px; }
+.vista-publicacion.ok { background: var(--verde-claro); color: var(--verde-texto); }
+.vista-publicacion.error { background: #fbeceb; color: #8c2a20; }
+.vista-publicacion.cargando { color: var(--suave); }
+label small.nota { font-weight: 400; }

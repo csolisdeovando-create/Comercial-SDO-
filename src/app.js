@@ -9,6 +9,7 @@ const { REQUISITOS, TIPOS, todosLosCampos, nombreRequisito } = require('./requis
 const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias } = require('./agenda');
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
+const { interpretarUrl, leerPublicacion, resumenPropiedad } = require('./publicacion');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
 
@@ -77,12 +78,18 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     let lead = db.leadPorTelefono(telefono);
     if (lead && ['no_continua', 'cerrado'].includes(lead.estado)) lead = null;
     const portal = detectarPortal(texto);
-    const propiedad = extraerUrl(texto) || (portal ? texto.slice(0, 300) : null);
+    const pub = interpretarUrl(extraerUrl(texto));
+    const url_publicacion = pub?.url || null;
+    const propiedad = resumenPropiedad(pub) || (portal ? texto.slice(0, 300) : null);
     if (!lead) {
-      lead = db.crearLead({ telefono, nombre: nombrePerfil || null, portal, propiedad, mensaje_inicial: texto.slice(0, 1000) });
+      lead = db.crearLead({ telefono, nombre: nombrePerfil || null, portal: portal || pub?.portal || null, propiedad, url_publicacion, mensaje_inicial: texto.slice(0, 1000) });
     } else if (lead.estado === 'contactado' && (portal || propiedad)) {
       // Nueva consulta por otra propiedad antes de postular: se actualiza el interés
-      lead = db.actualizarLead(lead.id, { portal: portal || lead.portal, propiedad: propiedad || lead.propiedad });
+      lead = db.actualizarLead(lead.id, {
+        portal: portal || pub?.portal || lead.portal,
+        propiedad: propiedad || lead.propiedad,
+        url_publicacion: url_publicacion || lead.url_publicacion,
+      });
     }
 
     // Meta puede reenviar el mismo webhook: no responder dos veces
@@ -148,6 +155,13 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   app.get('/', (_req, res) => res.redirect('/postular'));
   app.get('/salud', (_req, res) => res.json({ ok: true }));
   app.get('/postular', (req, res) => mostrarFormulario(req, res, null));
+
+  // Lee la propiedad desde el link de la publicación (lo usa el formulario al pegar el link)
+  app.get('/api/publicacion', async (req, res) => {
+    const info = await leerPublicacion(String(req.query.url || '').slice(0, 2000));
+    if (!info) return res.status(422).json({ ok: false, error: 'No es un link válido.' });
+    res.json({ ok: true, ...info, resumen: resumenPropiedad(info) });
+  });
   app.get('/postular/:token', (req, res) => {
     const lead = leadDesdeToken(req, res);
     if (lead) mostrarFormulario(req, res, lead);
@@ -199,6 +213,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         lead = previo && ['contactado', 'rechazado'].includes(previo.estado) ? previo : db.crearLead({ telefono, portal: 'Formulario web' });
       }
 
+      const pub = b.url_publicacion ? await leerPublicacion(String(b.url_publicacion).slice(0, 2000), { timeoutMs: 3000 }) : null;
       const estado = config.agenda.automatica ? 'aprobado' : 'documentos_recibidos';
       lead = db.actualizarLead(lead.id, {
         tipo,
@@ -208,7 +223,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         telefono,
         razon_social: tipo === 'independiente' ? String(b.razon_social || '').trim().slice(0, 150) || null : null,
         rut_empresa: tipo === 'independiente' && b.rut_empresa ? limpiarRut(b.rut_empresa) : null,
-        propiedad: String(b.propiedad || '').trim().slice(0, 300) || lead.propiedad,
+        propiedad: String(b.propiedad || '').trim().slice(0, 300) || resumenPropiedad(pub) || lead.propiedad,
+        url_publicacion: pub?.url || lead.url_publicacion || null,
+        portal: !lead.portal || lead.portal === 'Formulario web' ? pub?.portal || lead.portal : lead.portal,
         comentarios: String(b.comentarios || '').trim().slice(0, 2000) || null,
         estado,
         motivo_rechazo: null,

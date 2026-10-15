@@ -120,7 +120,13 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
             <label>Razón social (si postulas como empresa)<input name="razon_social" value="${val('razon_social')}"></label>
             <label>RUT empresa<input name="rut_empresa" placeholder="76.123.456-7" value="${esc(v.rut_empresa ? formatearRut(v.rut_empresa) : '')}" data-rut></label>
           </div>
-          <label>Propiedad de interés<input name="propiedad" placeholder="Dirección, código o link del aviso" value="${val('propiedad')}"></label>
+          <label for="url_publicacion">Link de la publicación que te interesa
+            <input id="url_publicacion" name="url_publicacion" type="text" inputmode="url" autocomplete="off" placeholder="Pega aquí el link del aviso (Mercado Libre, Yapo, Portal Inmobiliario…)" value="${val('url_publicacion')}" data-publicacion>
+          </label>
+          <div class="vista-publicacion" id="vista-publicacion" hidden aria-live="polite"></div>
+          <label for="propiedad">Dirección de la propiedad <small class="nota">(si no la sabes, basta con el link)</small>
+            <input id="propiedad" name="propiedad" placeholder="Ej: Rosario Sur 91, depto 504, Las Condes" value="${val('propiedad')}">
+          </label>
         </fieldset>
 
         ${seccionDocs('dependiente')}
@@ -246,6 +252,7 @@ function fichaLead(lead) {
     ${fila('Correo', lead.email)}
     ${fila('Teléfono', lead.telefono && `+${lead.telefono}`)}
     ${fila('Propiedad', lead.propiedad)}
+    ${lead.url_publicacion ? `<tr><th>Publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : ''}
     ${fila('Origen', lead.portal)}
     ${fila('Comentarios', lead.comentarios)}
   </table>`;

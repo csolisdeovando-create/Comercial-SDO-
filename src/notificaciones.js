@@ -30,7 +30,9 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       ${fila('Tipo', REQUISITOS[lead.tipo]?.etiqueta)}${fila('Razón social', lead.razon_social)}
       ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
       ${fila('Correo', lead.email)}${fila('Teléfono', lead.telefono && `+${lead.telefono}`)}
-      ${fila('Propiedad', lead.propiedad)}${fila('Origen', lead.portal)}${fila('Comentarios', lead.comentarios)}
+      ${fila('Propiedad', lead.propiedad)}
+      ${lead.url_publicacion ? `<tr><td style="padding:6px 10px;color:#5a6478;width:140px">Publicación</td><td style="padding:6px 10px"><a href="${esc(lead.url_publicacion)}">Ver aviso</a></td></tr>` : ''}
+      ${fila('Origen', lead.portal)}${fila('Comentarios', lead.comentarios)}
     </table>`;
   };
 
@@ -224,7 +226,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         duracionMinutos: config.agenda.duracionMinutos,
         zona: config.zonaHoraria,
         titulo: `Visita propiedad – ${lead.nombre}`,
-        descripcion: `Interesado: ${lead.nombre}\nTeléfono: +${lead.telefono || ''}\nCorreo: ${lead.email || ''}\nPropiedad: ${lead.propiedad || '-'}\nOrigen: ${lead.portal || '-'}`,
+        descripcion: `Interesado: ${lead.nombre}\nTeléfono: +${lead.telefono || ''}\nCorreo: ${lead.email || ''}\nPropiedad: ${lead.propiedad || '-'}\nAviso: ${lead.url_publicacion || '-'}\nOrigen: ${lead.portal || '-'}`,
         ubicacion: lead.propiedad || '',
         organizador: config.correo.documentos[0],
         asistentes: [...config.correo.visitas, lead.email].filter(Boolean),

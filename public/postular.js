@@ -37,6 +37,41 @@
     i.addEventListener('blur', function () { i.value = formatearRut(i.value); });
   });
 
+  // Al pegar el link del aviso, se identifica la propiedad automáticamente
+  var campoUrl = form.querySelector('[data-publicacion]');
+  var campoProp = form.querySelector('[name=propiedad]');
+  var vista = document.getElementById('vista-publicacion');
+  var autoCompletado = '';
+  var temporizador;
+  function mostrar(html, clase) {
+    vista.hidden = !html;
+    vista.className = 'vista-publicacion ' + (clase || '');
+    vista.innerHTML = html;
+  }
+  function esc(t) { var d = document.createElement('div'); d.textContent = t || ''; return d.innerHTML; }
+  function consultar() {
+    var url = campoUrl.value.trim();
+    if (!url) { mostrar(''); return; }
+    mostrar('Buscando la propiedad…', 'cargando');
+    fetch('/api/publicacion?url=' + encodeURIComponent(url))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { mostrar('No reconocemos ese link. Revisa que esté completo o escribe la dirección abajo.', 'error'); return; }
+        var titulo = d.direccion || d.titulo || d.descripcion || 'Publicación';
+        mostrar('<strong>🏠 ' + esc(titulo) + '</strong><span>' + esc([d.portal, d.codigo].filter(Boolean).join(' · ')) + '</span>', 'ok');
+        // Completa la dirección solo si el interesado no la escribió
+        if (!campoProp.value.trim() || campoProp.value === autoCompletado) {
+          campoProp.value = d.resumen || titulo;
+          autoCompletado = campoProp.value;
+        }
+      })
+      .catch(function () { mostrar(''); });
+  }
+  if (campoUrl) {
+    campoUrl.addEventListener('input', function () { clearTimeout(temporizador); temporizador = setTimeout(consultar, 500); });
+    if (campoUrl.value) consultar();
+  }
+
   form.addEventListener('submit', function (e) {
     if (!form.checkValidity()) {
       e.preventDefault();

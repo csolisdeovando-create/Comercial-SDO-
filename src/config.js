@@ -45,10 +45,10 @@ function cargarConfig(env = process.env) {
     },
 
     correo: {
-      documentos: lista(env.EMAIL_DOCUMENTOS, 'sdopropiedades@sdorent.cl'),
+      documentos: lista(env.EMAIL_DOCUMENTOS, 'sdopropiedades@sdorent.cl,csolisdeovando@sdocapital.cl'),
       visitas: lista(
         env.EMAIL_VISITAS,
-        'julio.mendoza@sdorent.cl,barbara.diaz@sdorent.cl,csolisdeovando@sdocapital.cl'
+        'julio.mendoza@sdorent.cl,barbara.diaz@sdorent.cl,csolisdeovando@sdocapital.cl,josecano@sdorent.cl'
       ),
       from: env.EMAIL_FROM || 'SDO Rent <sdopropiedades@sdorent.cl>',
       maxAdjuntosMB: Number(env.EMAIL_MAX_ADJUNTOS_MB || 20),

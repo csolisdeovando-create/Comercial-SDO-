@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const { construirCalendario, bloqueValido, describirBloque, generarICS } = require('../src/agenda');
 const { rutValido, formatearRut, normalizarTelefono } = require('../src/utils');
 const { detectarPortal, extraerUrl } = require('../src/whatsapp');
+const { interpretarUrl, leerPublicacion } = require('../src/publicacion');
 
 const cfg = {
   zonaHoraria: 'America/Santiago',
@@ -71,4 +72,29 @@ test('utilidades: RUT, teléfono y detección de portal', () => {
   assert.strictEqual(detectarPortal('https://www.yapo.cl/arriendo/123'), 'Yapo');
   assert.strictEqual(detectarPortal('https://www.portalinmobiliario.com/MLC-123'), 'Portal Inmobiliario');
   assert.strictEqual(extraerUrl('mira https://articulo.mercadolibre.cl/MLC-1). gracias'), 'https://articulo.mercadolibre.cl/MLC-1');
+});
+
+test('interpreta links de distintos portales', async () => {
+  const pi = interpretarUrl('Mira este: https://www.portalinmobiliario.com/MLC-1523456789-departamento-en-arriendo-santiago-centro-_JM');
+  assert.strictEqual(pi.portal, 'Portal Inmobiliario');
+  assert.strictEqual(pi.codigo, 'MLC-1523456789');
+  assert.strictEqual(pi.descripcion, 'Departamento en arriendo santiago centro');
+  const yapo = interpretarUrl('www.yapo.cl/inmuebles/arriendo/depto-amoblado-en-nunoa/92837465');
+  assert.strictEqual(yapo.portal, 'Yapo');
+  assert.strictEqual(yapo.codigo, '92837465');
+  assert.match(yapo.descripcion, /amoblado en nunoa/);
+  assert.strictEqual(interpretarUrl('sin link'), null);
+
+  // Si el portal permite leer la página, se usa el título y la dirección
+  const html = `<html><head><meta property="og:title" content="Depto 2D 2B en Providencia | Mercado Libre">
+    <script type="application/ld+json">{"@type":"Product","address":{"streetAddress":"Av. Providencia 1234","addressLocality":"Providencia"}}</script></head></html>`;
+  const fetchFn = async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+  const leido = await leerPublicacion('https://departamento.mercadolibre.cl/MLC-111111111-x-_JM', { fetchFn });
+  assert.strictEqual(leido.titulo, 'Depto 2D 2B en Providencia');
+  assert.strictEqual(leido.direccion, 'Av. Providencia 1234, Providencia');
+
+  // Nunca consulta sitios que no son portales conocidos
+  let consultado = false;
+  await leerPublicacion('http://169.254.169.254/latest/meta-data', { fetchFn: async () => { consultado = true; } });
+  assert.strictEqual(consultado, false);
 });

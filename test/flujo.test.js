@@ -80,7 +80,8 @@ test('flujo completo de un lead', async (t) => {
   assert.match(ctx.wa[0].texto, /Certificado de cotizaciones \(AFP\)/);
   const lead0 = ctx.db.leadPorTelefono('56987654321');
   assert.ok(ctx.wa[0].texto.includes(`/postular/${lead0.token}`));
-  assert.strictEqual(lead0.propiedad, 'https://departamento.mercadolibre.cl/MLC-123');
+  assert.strictEqual(lead0.url_publicacion, 'https://departamento.mercadolibre.cl/MLC-123');
+  assert.strictEqual(lead0.portal, 'Mercado Libre');
 
   // Reintento del mismo webhook y nuevo mensaje dentro del enfriamiento: no responde de nuevo
   await postWebhook(ctx, mensajeWA('wamid.1', '56987654321', 'Hola!'));
@@ -108,6 +109,9 @@ test('flujo completo de un lead', async (t) => {
 
   const aBarbara = ctx.correos.find((c) => [].concat(c.to).includes('sdopropiedades@sdorent.cl'));
   assert.ok(aBarbara, 'debe llegar correo a sdopropiedades');
+  // Los documentos llegan a sdopropiedades y Cristian; Julio y José no los reciben
+  assert.deepStrictEqual(aBarbara.to, ['sdopropiedades@sdorent.cl', 'csolisdeovando@sdocapital.cl']);
+  assert.ok(!ctx.correos.some((c) => [].concat(c.to).includes('julio.mendoza@sdorent.cl') && /postulaci/i.test(c.subject)));
   assert.strictEqual(aBarbara.attachments.length, 6);
   assert.match(aBarbara.html, /Aprobar y enviar calendario/);
   const linkAprobar = aBarbara.html.match(/href="([^"]+\/aprobar\?firma=[^"]+)"/)[1];
@@ -140,7 +144,7 @@ test('flujo completo de un lead', async (t) => {
   assert.strictEqual(r.status, 303);
   assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'agendado');
   const aEquipo = ctx.correos.find((c) => /Nueva visita agendada/.test(c.subject));
-  assert.deepStrictEqual(aEquipo.to, ['julio.mendoza@sdorent.cl', 'barbara.diaz@sdorent.cl', 'csolisdeovando@sdocapital.cl']);
+  assert.deepStrictEqual(aEquipo.to, ['julio.mendoza@sdorent.cl', 'barbara.diaz@sdorent.cl', 'csolisdeovando@sdocapital.cl', 'josecano@sdorent.cl']);
   assert.match(aEquipo.subject, /Viernes 16 de octubre a las 09:00/);
   assert.match(aEquipo.icalEvent.content, /DTSTART;TZID=America\/Santiago:20261016T090000/);
   assert.match(ctx.wa.at(-1).texto, /Viernes 16 de octubre a las 09:00/);
@@ -350,4 +354,26 @@ test('panel: resultado de visita, cancelar y eliminar interesado', async (t) => 
   // Si vuelve a escribir por WhatsApp después de "no continúa", parte como interesado nuevo
   await postWebhook(ctx, mensajeWA('wamid.x', '56987654321', 'Hola de nuevo'));
   assert.match(ctx.wa.at(-1).texto, /\/postular\//);
+});
+
+test('link de la publicación: identifica la propiedad y el portal', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const url = 'https://departamento.mercadolibre.cl/MLC-2754123456-se-arrienda-depto-providencia-2d-2b-_JM#position=3';
+  const r = await (await fetch(`${ctx.url}/api/publicacion?url=${encodeURIComponent(url)}`)).json();
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.portal, 'Mercado Libre');
+  assert.strictEqual(r.codigo, 'MLC-2754123456');
+  assert.match(r.descripcion, /^Se arrienda depto providencia 2D 2B$/);
+  assert.strictEqual((await fetch(`${ctx.url}/api/publicacion?url=hola`)).status, 422);
+
+  // Al postular solo con el link, la propiedad y el origen se completan solos
+  const res = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, url_publicacion: url }, DOCS_DEP) });
+  assert.strictEqual(res.status, 200);
+  const lead = ctx.db.leadPorTelefono('56987654321');
+  assert.strictEqual(lead.portal, 'Mercado Libre');
+  assert.match(lead.propiedad, /providencia 2D 2B \(MLC-2754123456\)/);
+  assert.strictEqual(lead.url_publicacion, url.replace(/#.*/, ''));
+  const correo = ctx.correos.find((c) => [].concat(c.to).includes('sdopropiedades@sdorent.cl'));
+  assert.ok(correo.html.includes('Ver aviso'));
 });
