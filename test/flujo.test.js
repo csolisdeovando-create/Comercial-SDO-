@@ -671,3 +671,15 @@ test('sábados para Xiomara, bloqueos del equipo y reagendar desde el panel', as
   cal = await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text();
   assert.match(cal, /value="2026-10-16\|15"/);
 });
+
+test('sábado solo hasta las 15:00', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const lead = ctx.db.crearLead({ telefono: '56911110000', nombre: 'Luis', email: 'l@example.com', estado: 'aprobado' });
+  const cal = await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text();
+  for (const h of [9, 11, 13, 15]) assert.match(cal, new RegExp(`value="2026-10-17\\|${h}"`));
+  assert.doesNotMatch(cal, /value="2026-10-17\|17"/);
+  assert.match(cal, /value="2026-10-16\|17"/, 'viernes sigue hasta las 17');
+  const r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-17|17' }) });
+  assert.strictEqual(r.status, 422);
+});

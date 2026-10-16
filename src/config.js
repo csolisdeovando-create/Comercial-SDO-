@@ -36,7 +36,7 @@ function cargarConfig(env = process.env) {
       horas: lista(env.AGENDA_HORAS, '9,11,13,15,17').map(Number),
       // Días con visitas: 1 = lunes … 6 = sábado
       diasSemana: lista(env.AGENDA_DIAS, '1,2,3,4,5,6').map(Number),
-      horasSabado: lista(env.AGENDA_HORAS_SABADO, '9,11,13,15,17').map(Number),
+      horasSabado: lista(env.AGENDA_HORAS_SABADO, '9,11,13,15').map(Number),
       diasHabiles: Number(env.AGENDA_DIAS_HABILES || 15),
       anticipacionHoras: Number(env.AGENDA_ANTICIPACION_HORAS || 2),
       cuposPorBloque: Number(env.AGENDA_CUPOS_POR_BLOQUE || 1),
