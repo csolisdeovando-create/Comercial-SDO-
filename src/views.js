@@ -19,13 +19,15 @@ function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = ''
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#ffffff">
 <title>${esc(titulo)} · ${esc(empresa)}</title>
-<link rel="icon" type="image/png" href="/static/icono.png">
-<link rel="apple-touch-icon" href="/static/icono.png">
-<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" type="image/png" sizes="64x64" href="/static/icono.png?v=${VERSION}">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/icono-180.png?v=${VERSION}">
+<link rel="manifest" href="/static/manifest.webmanifest?v=${VERSION}">
+<meta name="apple-mobile-web-app-title" content="SDO Comercial">
+<link rel="stylesheet" href="/static/styles.css?v=${VERSION}">
 </head>
 <body>
 <header class="barra"><div class="contenedor ${ancho}">
-  <a class="logo" href="${nav ? '/admin' : '#'}"><img src="/static/logo.png" alt="${esc(empresa)}" width="94" height="48"></a>
+  <a class="logo" href="${nav ? '/admin' : '#'}"><img src="/static/logo.png?v=${VERSION}" alt="${esc(empresa)}" width="94" height="48"></a>
   <span class="sub">${nav ? 'Panel comercial' : 'Área Comercial'}</span>
   ${menu}
 </div></header>
@@ -33,7 +35,7 @@ function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = ''
 ${cuerpo}
 </main>
 ${pie ? `<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación de arriendo.</footer>` : ''}
-${scripts.map((sc) => `<script src="${sc}" defer></script>`).join('\n')}
+${scripts.map((sc) => `<script src="${sc}?v=${VERSION}" defer></script>`).join('\n')}
 </body>
 </html>`;
 }
@@ -52,6 +54,9 @@ function mensaje(titulo, texto, opciones = {}) {
 }
 
 // ---------- Formulario de postulación ----------
+
+// Cambia en cada publicación para que los navegadores descarguen estilos e íconos nuevos
+const VERSION = Date.now().toString(36);
 
 const ACEPTA = '.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,image/*,application/pdf';
 
