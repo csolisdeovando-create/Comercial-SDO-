@@ -75,6 +75,7 @@ function migrar(db) {
   if (!visitas.includes('resultado')) db.exec('ALTER TABLE visitas ADD COLUMN resultado TEXT');
   if (!visitas.includes('notas')) db.exec('ALTER TABLE visitas ADD COLUMN notas TEXT');
   if (!visitas.includes('resultado_at')) db.exec('ALTER TABLE visitas ADD COLUMN resultado_at TEXT');
+  if (!visitas.includes('recordatorio_at')) db.exec('ALTER TABLE visitas ADD COLUMN recordatorio_at TEXT');
   if (!columnas('leads').includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
 }
 
@@ -116,6 +117,7 @@ function crearRepositorio(db) {
 
     leadPorId: (id) => db.prepare('SELECT * FROM leads WHERE id = ?').get(id),
     leadPorToken: (token) => db.prepare('SELECT * FROM leads WHERE token = ?').get(String(token)),
+    leadPorRut: (rut) => (rut ? db.prepare('SELECT * FROM leads WHERE rut = ? ORDER BY id DESC LIMIT 1').get(rut) : undefined),
     leadPorTelefono: (tel) =>
       db.prepare('SELECT * FROM leads WHERE telefono = ? ORDER BY id DESC LIMIT 1').get(tel),
 
@@ -124,7 +126,10 @@ function crearRepositorio(db) {
         .prepare(
           `SELECT l.*, (SELECT COUNT(*) FROM documentos d WHERE d.lead_id = l.id) AS n_documentos,
              (SELECT fecha || ' ' || hora FROM visitas v WHERE v.lead_id = l.id AND v.estado = 'confirmada'
-              ORDER BY v.id DESC LIMIT 1) AS visita
+              ORDER BY v.id DESC LIMIT 1) AS visita,
+             (SELECT resultado FROM visitas v WHERE v.lead_id = l.id AND v.estado = 'confirmada'
+              ORDER BY v.id DESC LIMIT 1) AS resultado_visita,
+             (SELECT GROUP_CONCAT(o.id) FROM leads o WHERE o.id <> l.id AND (o.telefono = l.telefono OR (l.rut IS NOT NULL AND o.rut = l.rut))) AS duplicados
            FROM leads l ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`
         )
         .all(limite),
@@ -190,6 +195,14 @@ function crearRepositorio(db) {
       db
         .prepare(`UPDATE visitas SET resultado = ?, notas = ?, resultado_at = datetime('now') WHERE id = ?`)
         .run(resultado, notas || null, visitaId),
+    visitasParaRecordar: (fecha) =>
+      db
+        .prepare(
+          `SELECT * FROM visitas WHERE estado = 'confirmada' AND fecha = ? AND recordatorio_at IS NULL AND resultado IS NULL`
+        )
+        .all(fecha),
+    marcarRecordatorio: (visitaId) =>
+      db.prepare(`UPDATE visitas SET recordatorio_at = datetime('now') WHERE id = ?`).run(visitaId),
     cancelarVisita: (visitaId) => db.prepare(`UPDATE visitas SET estado = 'cancelada' WHERE id = ?`).run(visitaId),
 
     // Elimina al interesado con todo su historial; devuelve las rutas de sus archivos para borrarlos del disco

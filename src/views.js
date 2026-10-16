@@ -282,37 +282,69 @@ const opcPanel = (config, nav) => ({ empresa: config.empresa.nombre, ancho: 'anc
 const linkWhatsapp = (tel) => (tel ? `<a href="https://wa.me/${esc(tel)}" target="_blank">+${esc(tel)}</a>` : '—');
 const bloqueDeVisita = (v) => describirBloque(...v.split(' ').map((x, i) => (i ? Number(x) : x)));
 
-function panel({ leads, visitas, eliminado, config }) {
-  const conteo = (e) => leads.filter((l) => l.estado === e).length;
+function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) {
+  const conteo = (e) => todos.filter((l) => l.estado === e).length;
+  const deHoy = visitas.filter((v) => v.fecha === hoy);
   const resumen = [
-    ['documentos_recibidos', 'Por revisar'],
-    ['aprobado', 'Esperando agenda'],
-    ['agendado', 'Con visita'],
-    ['contactado', 'Sin postular aún'],
+    ['documentos_recibidos', 'Por revisar', conteo('documentos_recibidos')],
+    ['aprobado', 'Esperando agenda', conteo('aprobado')],
+    ['agendado', 'Con visita agendada', conteo('agendado')],
+    ['hoy', 'Visitas hoy', deHoy.length],
   ];
+  const filtrando = Boolean(filtros.q || filtros.estado);
+  const opcionesEstado = Object.entries(ETIQUETAS_ESTADO)
+    .map(([k, t]) => `<option value="${k}" ${filtros.estado === k ? 'selected' : ''}>${esc(t)}</option>`)
+    .join('');
+  const filaVisita = (v) =>
+    `<tr><td>${esc(fechaLarga(v.fecha))}</td><td>${horaTexto(v.hora)}</td><td><a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a></td><td>${linkWhatsapp(v.telefono)}</td><td>${esc(v.propiedad || '—')}</td></tr>`;
+
   return layout(
     'Panel comercial',
     `${eliminado ? `<div class="alerta ok">🗑️ Se eliminó a <strong>${esc(eliminado)}</strong> con todos sus documentos.</div>` : ''}
     <section class="resumen-estados">
-      ${resumen.map(([e, t]) => `<div class="cifra ${e}"><strong>${conteo(e)}</strong><span>${t}</span></div>`).join('')}
+      ${resumen
+        .map(
+          ([e, t, n]) =>
+            `<a class="cifra ${e} ${filtros.estado === e ? 'activa' : ''}" href="${e === 'hoy' ? '#hoy' : `/admin?estado=${e}#interesados`}"><strong>${n}</strong><span>${t}</span></a>`
+        )
+        .join('')}
     </section>
+    ${
+      deHoy.length
+        ? `<section class="tarjeta destacada" id="hoy">
+      <h1>📅 Visitas de hoy</h1>
+      <ul class="agenda-lista">${deHoy
+        .map(
+          (v) =>
+            `<li><span class="cuando">${horaTexto(v.hora)} hrs</span> <a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a> · ${linkWhatsapp(v.telefono)}${v.propiedad ? ` · ${esc(v.propiedad)}` : ''}${v.resultado ? ` · <strong>${RESULTADO_VISITA[v.resultado]}</strong>` : ''}</li>`
+        )
+        .join('')}</ul>
+    </section>`
+        : ''
+    }
     <section class="tarjeta">
       <div class="titulo-seccion"><h1>Próximas visitas</h1><a class="boton chico" href="/admin/calendario">Ver calendario</a></div>
       ${
         visitas.length
           ? `<div class="tabla-scroll"><table class="tabla"><thead><tr><th>Fecha</th><th>Hora</th><th>Interesado</th><th>Teléfono</th><th>Propiedad</th></tr></thead><tbody>
-          ${visitas
-            .slice(0, 8)
-            .map(
-              (v) =>
-                `<tr><td>${esc(fechaLarga(v.fecha))}</td><td>${horaTexto(v.hora)}</td><td><a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a></td><td>${linkWhatsapp(v.telefono)}</td><td>${esc(v.propiedad || '—')}</td></tr>`
-            )
-            .join('')}</tbody></table></div>`
+          ${visitas.slice(0, 8).map(filaVisita).join('')}</tbody></table></div>`
           : '<p class="nota">No hay visitas agendadas.</p>'
       }
     </section>
-    <section class="tarjeta">
-      <h1>Interesados</h1>
+    <section class="tarjeta" id="interesados">
+      <div class="titulo-seccion">
+        <h1>Interesados</h1>
+        <a class="boton chico" href="/admin/exportar.csv">⬇ Exportar a Excel</a>
+      </div>
+      <form class="filtros" method="get" action="/admin#interesados" role="search">
+        <label for="q" class="oculto">Buscar</label>
+        <input id="q" name="q" type="search" placeholder="Buscar por nombre, RUT, teléfono, correo o propiedad" value="${esc(filtros.q || '')}">
+        <label for="estado" class="oculto">Estado</label>
+        <select id="estado" name="estado"><option value="">Todos los estados</option>${opcionesEstado}</select>
+        <button class="boton">Buscar</button>
+        ${filtrando ? '<a class="boton chico" href="/admin#interesados">Limpiar</a>' : ''}
+      </form>
+      ${filtrando ? `<p class="nota">${leads.length} resultado(s)</p>` : ''}
       <div class="tabla-scroll"><table class="tabla"><thead><tr><th>#</th><th>Nombre</th><th>Teléfono</th><th>Origen</th><th>Estado</th><th>Documentos</th><th></th></tr></thead><tbody>
       ${
         leads.length
@@ -320,7 +352,8 @@ function panel({ leads, visitas, eliminado, config }) {
               .map(
                 (l) => `<tr>
           <td>${l.id}</td>
-          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a><br><small>${esc(l.email || '')}</small></td>
+          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a><br><small>${esc(l.email || '')}</small>
+            ${l.duplicados ? `<br><span class="aviso-dup" title="Mismo teléfono o RUT que #${esc(l.duplicados)}">⚠️ Posible duplicado de ${l.duplicados.split(',').map((d) => `<a href="/admin/lead/${esc(d)}">#${esc(d)}</a>`).join(', ')}</span>` : ''}</td>
           <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>
           <td><span class="estado ${esc(l.estado)}">${esc(ETIQUETAS_ESTADO[l.estado] || l.estado)}</span>${l.visita ? `<br><small>${esc(bloqueDeVisita(l.visita))}</small>` : ''}</td>
@@ -329,7 +362,7 @@ function panel({ leads, visitas, eliminado, config }) {
         </tr>`
               )
               .join('')
-          : '<tr><td colspan="7" class="nota">Aún no hay interesados.</td></tr>'
+          : `<tr><td colspan="7" class="nota">${filtrando ? 'No hay interesados que coincidan con la búsqueda.' : 'Aún no hay interesados.'}</td></tr>`
       }
       </tbody></table></div>
     </section>`,
@@ -543,4 +576,4 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, proximas, config
   );
 }
 
-module.exports = { layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, confirmarEliminar };
+module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, confirmarEliminar };

@@ -13,7 +13,7 @@ const { crearApp } = require('../src/app');
 
 const AHORA = new Date('2026-10-15T13:00:00Z'); // jueves 10:00 Chile
 
-function preparar(envExtra = {}) {
+function preparar(envExtra = {}, { whatsappConfigurado = true, ahoraFn = () => AHORA } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdo-test-'));
   const config = cargarConfig({ DATA_DIR: dataDir, APP_SECRET: 'secreto-test', ADMIN_CLAVE: 'clave', ...envExtra });
   const db = abrirDB(':memory:');
@@ -28,12 +28,12 @@ function preparar(envExtra = {}) {
     },
   };
   const whatsapp = {
-    configurado: true,
+    configurado: whatsappConfigurado,
     async enviarTexto(to, texto) { wa.push({ to, texto }); },
     async enviarPlantilla(to, nombre, params) { wa.push({ to, plantilla: nombre, params }); },
     async marcarLeido() {},
   };
-  const app = crearApp({ config, db, mailer, whatsapp, ahora: () => AHORA });
+  const app = crearApp({ config, db, mailer, whatsapp, ahora: ahoraFn });
   return new Promise((resolve) => {
     const server = app.listen(0, () => {
       const url = `http://127.0.0.1:${server.address().port}`;
@@ -376,4 +376,92 @@ test('link de la publicación: identifica la propiedad y el portal', async (t) =
   assert.strictEqual(lead.url_publicacion, url.replace(/#.*/, ''));
   const correo = ctx.correos.find((c) => [].concat(c.to).includes('sdopropiedades@sdorent.cl'));
   assert.ok(correo.html.includes('Ver aviso'));
+});
+
+test('seguridad: webhook desactivado si WhatsApp no está conectado; encabezados', async (t) => {
+  const ctx = await preparar({}, { whatsappConfigurado: false });
+  t.after(() => ctx.server.close());
+  const r = await postWebhook(ctx, mensajeWA('w1', '56911112222', 'hola'));
+  assert.strictEqual(r.status, 404);
+  assert.strictEqual(ctx.db.leadPorTelefono('56911112222'), undefined);
+  const f = await fetch(`${ctx.url}/postular`);
+  assert.strictEqual(f.headers.get('x-frame-options'), 'DENY');
+  assert.strictEqual(f.headers.get('referrer-policy'), 'same-origin');
+});
+
+test('duplicados: reenvío en revisión suma documentos; aprobado reenvía su link', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP) });
+  const lead = ctx.db.leadPorTelefono('56987654321');
+
+  // Mismo teléfono y correo mientras está en revisión -> misma postulación, aviso de actualización
+  let r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP.slice(0, 1).concat([['liquidaciones', 'l.pdf'], ['afp', 'a.pdf'], ['dicom', 'd.pdf']])) });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(ctx.db.listarLeads().length, 1);
+  assert.strictEqual(ctx.db.documentosDeLead(lead.id).length, 10);
+  assert.ok(ctx.correos.some((c) => /^Actualización de documentos/.test(c.subject)));
+
+  // Ya aprobado -> no se crea otro; se reenvía el link al correo registrado
+  ctx.db.actualizarLead(lead.id, { estado: 'aprobado' });
+  const antes = ctx.correos.length;
+  r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP) });
+  assert.match(await r.text(), /Ya tienes una postulación aprobada/);
+  assert.strictEqual(ctx.db.listarLeads().length, 1);
+  const reenvio = ctx.correos.slice(antes).find((c) => c.to === 'juan@example.com');
+  assert.ok(reenvio.html.includes(`/agendar/${lead.token}`));
+
+  // Mismo RUT con otro correo -> se crea, marcado como posible duplicado
+  r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, email: 'otro@example.com', telefono: '+56 9 1111 2222' }, DOCS_DEP) });
+  assert.strictEqual(r.status, 200);
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
+  const panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.match(panel, /Posible duplicado de <a href="\/admin\/lead\/1">#1<\/a>/);
+});
+
+test('panel: buscador, filtro por estado y exportar a Excel', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
+  await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, propiedad: 'Rosario Sur 91' }, DOCS_DEP) });
+  ctx.db.crearLead({ telefono: '56900000001', nombre: 'Ana Muñoz', email: 'ana@example.com', estado: 'aprobado' });
+
+  let html = await (await fetch(`${ctx.url}/admin?q=munoz`, { headers: h })).text();
+  assert.match(html, /1 resultado\(s\)/);
+  assert.match(html, /Ana Muñoz/);
+  assert.doesNotMatch(html, /Juan Pérez Soto/);
+  html = await (await fetch(`${ctx.url}/admin?q=11111111`, { headers: h })).text();
+  assert.match(html, /Juan Pérez Soto/);
+  html = await (await fetch(`${ctx.url}/admin?estado=documentos_recibidos`, { headers: h })).text();
+  assert.match(html, /Juan Pérez Soto/);
+  assert.doesNotMatch(html, /Ana Muñoz/);
+
+  const r = await fetch(`${ctx.url}/admin/exportar.csv`, { headers: h });
+  assert.match(r.headers.get('content-disposition'), /interesados-sdo-2026-10-15\.csv/);
+  const bytes = Buffer.from(await r.arrayBuffer());
+  assert.deepStrictEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'BOM para Excel');
+  const lineas = bytes.subarray(3).toString('utf8').split('\r\n');
+  assert.strictEqual(lineas.length, 3);
+  assert.match(lineas[0], /^N°;Fecha postulación;Nombre;RUT/);
+  assert.ok(lineas.some((l) => l.includes('Juan Pérez Soto;11.111.111-1;Trabajador dependiente') && l.includes('Rosario Sur 91')));
+  assert.strictEqual((await fetch(`${ctx.url}/admin/exportar.csv`)).status, 401);
+});
+
+test('recordatorio de visita el día anterior', async (t) => {
+  let ahora = new Date('2026-10-15T13:00:00Z'); // jueves 10:00 Chile
+  const ctx = await preparar({}, { ahoraFn: () => ahora });
+  t.after(() => ctx.server.close());
+  const lead = ctx.db.crearLead({ telefono: '56900000002', nombre: 'Pedro Soto', email: 'pedro@example.com', estado: 'agendado' });
+  const visita = ctx.db.crearVisita(lead.id, '2026-10-16', 11);
+  ctx.db.db.prepare("UPDATE visitas SET created_at = '2026-10-13 12:00:00' WHERE id = ?").run(visita.id);
+  // Antes de las 10:00 no envía
+  ahora = new Date('2026-10-15T12:00:00Z');
+  assert.strictEqual(await ctx.app.locals.enviarRecordatorios(), 0);
+  ahora = new Date('2026-10-15T13:30:00Z');
+  assert.strictEqual(await ctx.app.locals.enviarRecordatorios(), 1);
+  const correo = ctx.correos.find((c) => c.to === 'pedro@example.com');
+  assert.match(correo.subject, /Recordatorio: tu visita es mañana – Viernes 16 de octubre a las 11:00 hrs/);
+  assert.ok(correo.html.includes(`/agendar/${lead.token}`));
+  // No se repite
+  assert.strictEqual(await ctx.app.locals.enviarRecordatorios(), 0);
 });

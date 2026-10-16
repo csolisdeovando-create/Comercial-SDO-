@@ -24,8 +24,60 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   const tareas = new Set(); // procesos en segundo plano (útil para pruebas)
   app.locals.esperarTareas = () => Promise.allSettled([...tareas]);
 
+  // Recordatorio por correo (y WhatsApp si está conectado) el día anterior a la visita, desde las 10:00
+  app.locals.enviarRecordatorios = async () => {
+    const { fecha: hoy, minutos } = ahoraEnZona(config.zonaHoraria, ahora());
+    if (minutos < 10 * 60) return 0;
+    let enviados = 0;
+    for (const visita of db.visitasParaRecordar(sumarDias(hoy, 1))) {
+      const lead = db.leadPorId(visita.lead_id);
+      // Si agendó hace menos de 12 horas, ya tiene la confirmación fresca
+      const creada = new Date(`${visita.created_at.replace(' ', 'T')}Z`).getTime();
+      if (!lead?.email || ahora().getTime() - creada < 12 * 3600 * 1000) {
+        db.marcarRecordatorio(visita.id);
+        continue;
+      }
+      try {
+        await notif.recordatorioVisita(lead, visita);
+        db.marcarRecordatorio(visita.id);
+        enviados++;
+      } catch (e) {
+        console.error('[recordatorio] no se pudo enviar:', e.message);
+      }
+    }
+    return enviados;
+  };
+
   app.set('trust proxy', true);
   app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.set({
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      // Los links personales (/agendar/<token>) no se filtran a otros sitios
+      'Referrer-Policy': 'same-origin',
+    });
+    next();
+  });
+
+  // Límite simple de solicitudes por IP (evita abusos del formulario)
+  function limitar(maximo, ventanaMs) {
+    const registro = new Map();
+    return (req, res, next) => {
+      const ahoraMs = Date.now();
+      const ip = req.ip || 'desconocida';
+      const recientes = (registro.get(ip) || []).filter((t) => ahoraMs - t < ventanaMs);
+      if (recientes.length >= maximo) {
+        return res
+          .status(429)
+          .send(vistas.mensaje('Demasiados intentos', 'Espera unos minutos e inténtalo nuevamente.', { ...opcVista, icono: '⏳' }));
+      }
+      recientes.push(ahoraMs);
+      registro.set(ip, recientes);
+      if (registro.size > 5000) registro.clear();
+      next();
+    };
+  }
   app.use('/static', express.static(path.join(__dirname, '..', 'public'), { maxAge: '1h' }));
 
   const tmpDir = path.join(config.uploadsDir, '_tmp');
@@ -46,6 +98,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     '/webhook/whatsapp',
     express.json({ limit: '2mb', verify: (req, _res, buf) => (req.rawBody = buf) }),
     (req, res) => {
+      // Mientras WhatsApp no esté conectado, no se acepta nada en esta dirección
+      if (!whatsapp.configurado) return res.sendStatus(404);
       if (!firmaValida(config.whatsapp.appSecret, req.rawBody, req.get('x-hub-signature-256'))) {
         return res.sendStatus(401);
       }
@@ -157,7 +211,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   app.get('/postular', (req, res) => mostrarFormulario(req, res, null));
 
   // Lee la propiedad desde el link de la publicación (lo usa el formulario al pegar el link)
-  app.get('/api/publicacion', async (req, res) => {
+  app.get('/api/publicacion', limitar(60, 60 * 1000), async (req, res) => {
     const info = await leerPublicacion(String(req.query.url || '').slice(0, 2000));
     if (!info) return res.status(422).json({ ok: false, error: 'No es un link válido.' });
     res.json({ ok: true, ...info, resumen: resumenPropiedad(info) });
@@ -207,10 +261,32 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         return res.status(422).send(vistas.formularioPostulacion({ lead, valores: { ...b, telefono }, errores, config }));
       }
 
-      // Si llega sin token pero el teléfono ya escribió por WhatsApp, se reutiliza ese lead
+      // Sin link personal: se busca si esta persona ya postuló (mismo teléfono o RUT)
+      let actualizacion = false;
       if (!lead) {
-        const previo = db.leadPorTelefono(telefono);
-        lead = previo && ['contactado', 'rechazado'].includes(previo.estado) ? previo : db.crearLead({ telefono, portal: 'Formulario web' });
+        const email = String(b.email).trim().toLowerCase();
+        const previo = db.leadPorTelefono(telefono) || db.leadPorRut(limpiarRut(b.rut));
+        const mismoCorreo = previo && (!previo.email || previo.email === email);
+        if (previo && ['contactado', 'rechazado'].includes(previo.estado) && mismoCorreo) {
+          lead = previo;
+        } else if (previo && previo.estado === 'documentos_recibidos' && mismoCorreo) {
+          // Vuelve a enviar mientras está en revisión: se suman los documentos a la misma postulación
+          lead = previo;
+          actualizacion = true;
+        } else if (previo && ['aprobado', 'agendado', 'no_asistio'].includes(previo.estado) && mismoCorreo) {
+          // Ya aprobado: no se duplica; se le reenvía su link del calendario al correo registrado
+          borrarTemporales(req);
+          await notif.enviarAgenda(previo, { soloCorreo: true }).catch((e) => console.error('[postulacion] reenvío agenda:', e));
+          return res.send(
+            vistas.mensaje(
+              'Ya tienes una postulación aprobada',
+              `Te reenviamos a <strong>${esc(previo.email)}</strong> el link para ${previo.estado === 'agendado' ? 'ver o cambiar tu visita' : 'agendar tu visita'}.`,
+              { ...opcVista, icono: '📬' }
+            )
+          );
+        } else {
+          lead = db.crearLead({ telefono, portal: 'Formulario web' });
+        }
       }
 
       const pub = b.url_publicacion ? await leerPublicacion(String(b.url_publicacion).slice(0, 2000), { timeoutMs: 3000 }) : null;
@@ -256,7 +332,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       borrarTemporales(req); // archivos de campos que no correspondían al tipo elegido
 
       try {
-        await notif.documentosRecibidos(lead, documentos);
+        await notif.documentosRecibidos(lead, documentos, { actualizacion });
         if (config.agenda.automatica) await notif.enviarAgenda(lead);
       } catch (e) {
         console.error('[postulacion] error enviando notificaciones:', e);
@@ -274,8 +350,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         );
     });
   };
-  app.post('/postular', recibirPostulacion);
-  app.post('/postular/:token', recibirPostulacion);
+  const limitePostular = limitar(10, 60 * 60 * 1000);
+  app.post('/postular', limitePostular, recibirPostulacion);
+  app.post('/postular/:token', limitePostular, recibirPostulacion);
 
   // ------------------------------------------------------------------
   // Revisión de documentos (links firmados enviados a sdopropiedades@)
@@ -437,9 +514,56 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
 
   const hoyChile = () => ahoraEnZona(config.zonaHoraria, ahora()).fecha;
 
+  const sinTildes = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
   app.get('/admin', (req, res) => {
     const eliminado = req.query.eliminado ? String(req.query.eliminado).slice(0, 150) : null;
-    res.send(vistas.panel({ leads: db.listarLeads(), visitas: db.listarVisitas(hoyChile()), eliminado, config }));
+    const filtros = { q: String(req.query.q || '').trim().slice(0, 100), estado: String(req.query.estado || '') };
+    const todos = db.listarLeads(5000);
+    let leads = todos;
+    if (filtros.estado && vistas.ETIQUETAS_ESTADO[filtros.estado]) leads = leads.filter((l) => l.estado === filtros.estado);
+    if (filtros.q) {
+      const q = sinTildes(filtros.q);
+      const qRut = limpiarRut(filtros.q);
+      leads = leads.filter(
+        (l) =>
+          sinTildes([l.nombre, l.email, l.telefono, l.propiedad, l.razon_social, l.portal].join(' ')).includes(q) ||
+          (qRut.length >= 4 && (l.rut || '').includes(qRut))
+      );
+    }
+    res.send(vistas.panel({ leads: leads.slice(0, 300), todos, visitas: db.listarVisitas(hoyChile()), hoy: hoyChile(), filtros, eliminado, config }));
+  });
+
+  // Planilla para Excel (separador ";" y BOM para que Excel en español abra bien los acentos)
+  app.get('/admin/exportar.csv', (_req, res) => {
+    const celda = (v) => {
+      let t = String(v ?? '');
+      if (/^[=+\-@]/.test(t)) t = `'${t}`; // evita fórmulas
+      return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+    };
+    const filas = [
+      ['N°', 'Fecha postulación', 'Nombre', 'RUT', 'Tipo', 'Razón social', 'Correo', 'Teléfono', 'Propiedad', 'Link aviso', 'Origen', 'Estado', 'Visita', 'Resultado visita', 'Documentos'],
+      ...db.listarLeads(100000).map((l) => [
+        l.id,
+        (l.documentos_at || l.created_at || '').slice(0, 10),
+        l.nombre,
+        l.rut ? formatearRut(l.rut) : '',
+        REQUISITOS[l.tipo]?.etiqueta || '',
+        l.razon_social,
+        l.email,
+        l.telefono ? `+${l.telefono}` : '',
+        l.propiedad,
+        l.url_publicacion,
+        l.portal,
+        vistas.ETIQUETAS_ESTADO[l.estado] || l.estado,
+        l.visita ? describirBloque(...l.visita.split(' ').map((x, i) => (i ? Number(x) : x))) : '',
+        l.resultado_visita ? vistas.RESULTADO_VISITA[l.resultado_visita].replace(/^\S+\s/, '') : '',
+        l.n_documentos,
+      ]),
+    ];
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="interesados-sdo-${hoyChile()}.csv"`);
+    res.send('\uFEFF' + filas.map((f) => f.map(celda).join(';')).join('\r\n'));
   });
 
   app.get('/admin/calendario', (req, res) => {

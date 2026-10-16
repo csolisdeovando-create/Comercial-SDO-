@@ -88,7 +88,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     },
 
     // 1) Documentos -> sdopropiedades@sdorent.cl (Bárbara)
-    async documentosRecibidos(lead, documentos) {
+    async documentosRecibidos(lead, documentos, { actualizacion = false } = {}) {
       // Adjunta los archivos que quepan en el límite del correo; el resto queda como link de descarga
       const limite = config.correo.maxAdjuntosMB * 1024 * 1024;
       let acumulado = 0;
@@ -116,10 +116,14 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       await mailer.enviar({
         to: config.correo.documentos,
         replyTo: lead.email || undefined,
-        subject: `Nueva postulación: ${lead.nombre} (${REQUISITOS[lead.tipo]?.etiqueta || lead.tipo})${lead.propiedad ? ` – ${lead.propiedad}` : ''}`,
+        subject: `${actualizacion ? 'Actualización de documentos' : 'Nueva postulación'}: ${lead.nombre} (${REQUISITOS[lead.tipo]?.etiqueta || lead.tipo})${lead.propiedad ? ` – ${lead.propiedad}` : ''}`,
         html: correoHTML(
-          'Nueva postulación',
-          `<p>Llegó una nueva postulación con documentos.</p>${tablaLead(lead)}
+          actualizacion ? 'Actualización de documentos' : 'Nueva postulación',
+          `<p>${
+            actualizacion
+              ? '<strong>El interesado volvió a enviar documentos</strong> para su postulación en revisión. Estos son los archivos nuevos; los anteriores siguen en el panel.'
+              : 'Llegó una nueva postulación con documentos.'
+          }</p>${tablaLead(lead)}
            <p><strong>Documentos (${documentos.length}):</strong></p><ul>${lista}</ul>
            <p style="color:#5a6478">${
              sinAdjuntar === 0
@@ -154,7 +158,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     },
 
     // 2) Aprobación -> calendario al interesado
-    async enviarAgenda(lead) {
+    async enviarAgenda(lead, { soloCorreo = false } = {}) {
       const link = linkAgenda(lead);
       await mailer
         .enviar({
@@ -170,6 +174,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         })
         .catch((e) => console.error('[correo] envío de agenda falló:', e.message));
 
+      if (soloCorreo) return;
       await enviarWhatsappSeguro(
         lead,
         `Hola ${primerNombre(lead)} 😊 Revisamos tus documentos y ya puedes agendar tu visita. Elige día y hora aquí 📅\n${link}`,
@@ -192,6 +197,27 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       await enviarWhatsappSeguro(
         lead,
         `Hola ${primerNombre(lead)}, revisamos tu postulación:\n\n${motivo}${permitirReenvio ? `\n\nPuedes volver a subir tus documentos aquí: ${link}` : ''}`
+      );
+    },
+
+    async recordatorioVisita(lead, visita) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      const link = linkAgenda(lead);
+      await mailer.enviar({
+        to: lead.email,
+        subject: `Recordatorio: tu visita es mañana – ${cuando}`,
+        html: correoHTML(
+          'Recordatorio de visita',
+          `<p>Hola ${esc(primerNombre(lead))},</p><p>Te recordamos tu visita de mañana:</p>
+           <p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
+           ${lead.propiedad ? `<p>🏠 ${esc(lead.propiedad)}</p>` : ''}
+           <p>Si no puedes asistir, por favor cambia el horario para dejar el bloque disponible:</p>
+           ${boton('Cambiar horario', link, '#111417')}`
+        ),
+      });
+      await enviarWhatsappSeguro(
+        lead,
+        `Hola ${primerNombre(lead)} 👋 Te recordamos tu visita de mañana: *${cuando}*. Si no puedes asistir, cambia el horario aquí: ${link}`
       );
     },
 
