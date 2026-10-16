@@ -36,6 +36,7 @@ ${cuerpo}
 </main>
 ${pie ? `<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación de arriendo.</footer>` : ''}
 ${scripts.map((sc) => `<script src="${sc}?v=${VERSION}" defer></script>`).join('\n')}
+${nav || titulo === 'Ingresar al panel' ? `<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {});</script>` : ''}
 </body>
 </html>`;
 }

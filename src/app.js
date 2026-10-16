@@ -78,6 +78,11 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       next();
     };
   }
+  // El service worker debe servirse desde la raíz para cubrir todo el sitio
+  app.get('/sw.js', (_req, res) => {
+    res.set({ 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' });
+    res.sendFile(path.join(__dirname, '..', 'public', 'sw.js'));
+  });
   app.use('/static', express.static(path.join(__dirname, '..', 'public'), { maxAge: '1h' }));
 
   const tmpDir = path.join(config.uploadsDir, '_tmp');
