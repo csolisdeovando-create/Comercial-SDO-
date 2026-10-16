@@ -163,7 +163,10 @@ test('flujo completo de un lead', async (t) => {
   assert.match(await (await fetch(`${ctx.url}/agendar/${otro.token}`)).text(), /value="2026-10-16\|9"/);
 
   // Panel interno
-  assert.strictEqual((await fetch(`${ctx.url}/admin`)).status, 401);
+  const sinSesion = await fetch(`${ctx.url}/admin`, { redirect: 'manual' });
+  assert.strictEqual(sinSesion.status, 303);
+  assert.strictEqual(sinSesion.headers.get('location'), '/ingresar?volver=%2Fadmin');
+  assert.strictEqual(sinSesion.headers.get('www-authenticate'), null, 'no debe pedir la ventana del navegador');
   const panel = await fetch(`${ctx.url}/admin`, { headers: { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` } });
   assert.match(await panel.text(), /Juan Pérez Soto/);
 });
@@ -244,7 +247,7 @@ test('panel: ficha con documentos, ZIP y calendario de visitas', async (t) => {
 
   // Sin clave no se accede a nada del panel
   for (const ruta of [`/admin/lead/${lead.id}`, `/admin/calendario`, `/admin/lead/${lead.id}/documentos.zip`, `/admin/documento/1`]) {
-    assert.strictEqual((await fetch(ctx.url + ruta)).status, 401, ruta);
+    assert.strictEqual((await fetch(ctx.url + ruta, { redirect: 'manual' })).status, 303, ruta);
   }
 
   const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: auth })).text();
@@ -444,7 +447,7 @@ test('panel: buscador, filtro por estado y exportar a Excel', async (t) => {
   assert.strictEqual(lineas.length, 3);
   assert.match(lineas[0], /^N°;Fecha postulación;Nombre;RUT/);
   assert.ok(lineas.some((l) => l.includes('Juan Pérez Soto;11.111.111-1;Trabajador dependiente') && l.includes('Rosario Sur 91')));
-  assert.strictEqual((await fetch(`${ctx.url}/admin/exportar.csv`)).status, 401);
+  assert.strictEqual((await fetch(`${ctx.url}/admin/exportar.csv`, { redirect: 'manual' })).status, 303);
 });
 
 test('recordatorio de visita el día anterior', async (t) => {
@@ -573,4 +576,39 @@ test('evento de calendario del equipo: información completa, confirmación, rea
   assert.match(canc.icalEvent.content, /METHOD:CANCEL/);
   assert.match(canc.icalEvent.content, /STATUS:CANCELLED/);
   assert.strictEqual(canc.icalEvent.content.replace(/\r\n /g, '').match(/UID:(.*)/)[1], uid);
+});
+
+test('inicio de sesión del panel con página propia (sirve en el ícono del iPhone)', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  let r = await fetch(`${ctx.url}/ingresar?volver=/admin/calendario`);
+  assert.match(await r.text(), /Panel comercial/);
+
+  // Clave incorrecta
+  r = await fetch(`${ctx.url}/ingresar`, { method: 'POST', body: new URLSearchParams({ usuario: 'admin', clave: 'mala', volver: '/admin' }), redirect: 'manual' });
+  assert.strictEqual(r.status, 401);
+  assert.match(await r.text(), /Usuario o clave incorrectos/);
+
+  // Correcta -> cookie y vuelve a donde iba
+  r = await fetch(`${ctx.url}/ingresar`, { method: 'POST', body: new URLSearchParams({ usuario: 'admin', clave: 'clave', volver: '/admin/calendario' }), redirect: 'manual' });
+  assert.strictEqual(r.status, 303);
+  assert.strictEqual(r.headers.get('location'), '/admin/calendario');
+  const cookie = r.headers.get('set-cookie');
+  assert.match(cookie, /sdo_sesion=.*HttpOnly/i);
+  const galleta = cookie.split(';')[0];
+  r = await fetch(`${ctx.url}/admin`, { headers: { cookie: galleta } });
+  assert.strictEqual(r.status, 200);
+  assert.match(await r.text(), /href="\/salir"/);
+
+  // No redirige a otros sitios
+  r = await fetch(`${ctx.url}/ingresar`, { method: 'POST', body: new URLSearchParams({ usuario: 'admin', clave: 'clave', volver: 'https://malo.com' }), redirect: 'manual' });
+  assert.strictEqual(r.headers.get('location'), '/admin');
+
+  // Cookie alterada no sirve
+  r = await fetch(`${ctx.url}/admin`, { headers: { cookie: galleta.replace(/.$/, 'x') }, redirect: 'manual' });
+  assert.strictEqual(r.status, 303);
+
+  // Salir
+  r = await fetch(`${ctx.url}/salir`, { headers: { cookie: galleta }, redirect: 'manual' });
+  assert.match(r.headers.get('set-cookie'), /sdo_sesion=;/);
 });

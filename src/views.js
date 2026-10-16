@@ -9,7 +9,7 @@ function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = ''
         ['calendario', '/admin/calendario', 'Calendario de visitas'],
       ]
         .map(([k, href, txt]) => `<a href="${href}" class="${nav === k ? 'activo' : ''}">${txt}</a>`)
-        .join('')}</nav>`
+        .join('')}<a href="/salir" class="salir">Salir</a></nav>`
     : '';
   return `<!doctype html>
 <html lang="es">
@@ -537,6 +537,25 @@ function seccionVisita(lead, visita) {
   </section>`;
 }
 
+function ingresar({ volver, error, usuario, config }) {
+  return layout(
+    'Ingresar al panel',
+    `<section class="tarjeta login">
+      <h1>Panel comercial</h1>
+      <p class="lead">Ingresa con el usuario y la clave del equipo comercial.</p>
+      ${error ? `<div class="alerta error">${esc(error)}</div>` : ''}
+      <form method="post" action="/ingresar">
+        <input type="hidden" name="volver" value="${esc(volver)}">
+        <label for="usuario">Usuario<input id="usuario" name="usuario" autocomplete="username" autocapitalize="none" required value="${esc(usuario || config.admin.usuario)}"></label>
+        <label for="clave">Clave<input id="clave" name="clave" type="password" autocomplete="current-password" required autofocus></label>
+        <button class="boton primario grande">Ingresar</button>
+      </form>
+      <p class="nota centrado">La sesión queda abierta 30 días en este dispositivo.</p>
+    </section>`,
+    { empresa: config.empresa.nombre, pie: false }
+  );
+}
+
 function confirmarEliminar({ lead, documentos, visita, config }) {
   return layout(
     'Eliminar interesado',
@@ -627,4 +646,4 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, proximas, config
   );
 }
 
-module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, confirmarEliminar };
+module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, confirmarEliminar, ingresar };

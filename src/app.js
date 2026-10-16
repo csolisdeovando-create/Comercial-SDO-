@@ -10,7 +10,7 @@ const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDi
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
 const { interpretarUrl, leerPublicacion, resumenPropiedad } = require('./publicacion');
-const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmaCorrecta } = require('./utils');
+const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
 
 const MIMES_PERMITIDOS = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif))$/;
@@ -549,16 +549,83 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   // ------------------------------------------------------------------
   // Panel interno (usuario/clave)
   // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Inicio de sesión del panel (página propia + cookie). Funciona también como app
+  // en la pantalla de inicio del iPhone, donde la ventana de usuario/clave del navegador no aparece.
+  // ------------------------------------------------------------------
+  const COOKIE = 'sdo_sesion';
+  const DURACION_SESION = 30 * 24 * 3600; // segundos
+  const huellaClave = () => crypto.createHash('sha256').update(config.admin.clave).digest('hex').slice(0, 16);
+  // Incluye la clave: si se cambia ADMIN_CLAVE, todas las sesiones abiertas se cierran
+  const firmaSesion = (exp) => firmar(config.secret, 'sesion', config.admin.usuario, huellaClave(), exp);
+
+  function leerCookies(req) {
+    const out = {};
+    for (const par of String(req.get('cookie') || '').split(';')) {
+      const i = par.indexOf('=');
+      if (i > 0) out[par.slice(0, i).trim()] = decodeURIComponent(par.slice(i + 1).trim());
+    }
+    return out;
+  }
+
+  function sesionValida(req) {
+    const [exp, firma] = String(leerCookies(req)[COOKIE] || '').split('.');
+    if (!exp || !firma || Number(exp) < Date.now() / 1000) return false;
+    return firmaCorrecta(config.secret, firma, 'sesion', config.admin.usuario, huellaClave(), exp);
+  }
+
+  function igualSeguro(a, b) {
+    const x = Buffer.from(String(a));
+    const y = Buffer.from(String(b));
+    return x.length === y.length && crypto.timingSafeEqual(x, y);
+  }
+
+  // Compatibilidad: también acepta usuario/clave enviados por el navegador (Basic)
+  function basicValido(req) {
+    const [tipo, valor] = String(req.get('authorization') || '').split(' ');
+    if (tipo !== 'Basic') return false;
+    const [u, ...c] = Buffer.from(valor || '', 'base64').toString().split(':');
+    return u === config.admin.usuario && igualSeguro(c.join(':'), config.admin.clave);
+  }
+
+  const destinoSeguro = (v) => (/^\/admin(\/[^\s]*)?$/.test(String(v || '')) && !String(v).startsWith('//') ? String(v) : '/admin');
+
+  app.get('/ingresar', (req, res) => {
+    if (config.admin.clave && sesionValida(req)) return res.redirect(303, destinoSeguro(req.query.volver));
+    res.set('Cache-Control', 'no-store');
+    res.send(vistas.ingresar({ volver: destinoSeguro(req.query.volver), config }));
+  });
+
+  app.post('/ingresar', limitar(10, 15 * 60 * 1000), express.urlencoded({ extended: false }), (req, res) => {
+    if (!config.admin.clave) return res.status(503).send('Configura ADMIN_CLAVE para habilitar el panel.');
+    const volver = destinoSeguro(req.body?.volver);
+    const ok = String(req.body?.usuario || '').trim() === config.admin.usuario && igualSeguro(req.body?.clave || '', config.admin.clave);
+    if (!ok) {
+      return res.status(401).send(vistas.ingresar({ volver, error: 'Usuario o clave incorrectos.', usuario: req.body?.usuario, config }));
+    }
+    const exp = Math.floor(Date.now() / 1000) + DURACION_SESION;
+    res.cookie(COOKIE, `${exp}.${firmaSesion(exp)}`, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: req.secure,
+      maxAge: DURACION_SESION * 1000,
+      path: '/',
+    });
+    res.redirect(303, volver);
+  });
+
+  app.get('/salir', (req, res) => {
+    res.clearCookie(COOKIE, { path: '/' });
+    res.redirect(303, '/ingresar');
+  });
+
   function requiereAdmin(req, res, next) {
     if (!config.admin.clave) return res.status(503).send('Configura ADMIN_CLAVE para habilitar el panel.');
-    const [tipo, valor] = String(req.get('authorization') || '').split(' ');
-    const [u, ...c] = Buffer.from(valor || '', 'base64').toString().split(':');
-    const okUsuario = tipo === 'Basic' && u === config.admin.usuario;
-    const a = Buffer.from(c.join(':'));
-    const b = Buffer.from(config.admin.clave);
-    if (!okUsuario || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      res.set('WWW-Authenticate', 'Basic realm="SDO Comercial", charset="UTF-8"');
-      return res.status(401).send('Autenticación requerida');
+    if (!sesionValida(req) && !basicValido(req)) {
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        return res.redirect(303, `/ingresar?volver=${encodeURIComponent(req.originalUrl)}`);
+      }
+      return res.status(401).send('Debes iniciar sesión.');
     }
     res.set('Cache-Control', 'no-store');
     if (req.method !== 'GET' && req.method !== 'HEAD') {
