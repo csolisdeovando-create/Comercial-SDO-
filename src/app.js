@@ -511,6 +511,42 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   });
 
   // ------------------------------------------------------------------
+  // Confirmación de asistencia (desde el recordatorio)
+  // ------------------------------------------------------------------
+  // GET solo muestra el botón: los antivirus de correo que abren links no confirman nada
+  app.get('/visita/:token/confirmar', (req, res) => {
+    const lead = leadDesdeToken(req, res);
+    if (!lead) return;
+    const visita = db.visitaVigente(lead.id);
+    if (!visita) return res.redirect(`/agendar/${lead.token}`);
+    const cuando = describirBloque(visita.fecha, visita.hora);
+    if (visita.confirmada_at) {
+      return res.send(vistas.mensaje('Visita confirmada', `Ya confirmaste tu visita del <strong>${esc(cuando)}</strong>. ¡Te esperamos!`, { ...opcVista, icono: '✅' }));
+    }
+    res.send(
+      vistas.mensaje('Confirma tu visita', `<strong>${esc(cuando)}</strong>${lead.propiedad ? `<br>🏠 ${esc(lead.propiedad)}` : ''}`, {
+        ...opcVista,
+        icono: '📅',
+        extra: `<form method="post" class="acciones-centradas"><button class="boton primario grande">✅ Sí, confirmo mi asistencia</button></form>
+          <p><a class="boton" href="/agendar/${lead.token}">📅 No puedo, quiero reagendar</a></p>`,
+      })
+    );
+  });
+
+  app.post('/visita/:token/confirmar', async (req, res) => {
+    const lead = leadDesdeToken(req, res);
+    if (!lead) return;
+    const visita = db.visitaVigente(lead.id);
+    if (!visita) return res.redirect(303, `/agendar/${lead.token}`);
+    if (!visita.confirmada_at) {
+      db.confirmarAsistencia(visita.id);
+      const actualizada = db.visitaVigente(lead.id);
+      await notif.asistenciaConfirmada(lead, actualizada).catch((e) => console.error('[confirmar] aviso al equipo:', e));
+    }
+    res.redirect(303, `/visita/${lead.token}/confirmar`);
+  });
+
+  // ------------------------------------------------------------------
   // Panel interno (usuario/clave)
   // ------------------------------------------------------------------
   function requiereAdmin(req, res, next) {
@@ -698,6 +734,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     if (!visita) return res.redirect(303, `/admin/lead/${lead.id}#visita`);
     db.cancelarVisita(visita.id);
     lead = db.actualizarLead(lead.id, { estado: 'aprobado' });
+    await notif.eventoCancelado(lead, visita, 'Cancelada desde el panel comercial.').catch((e) => console.error('[panel] cancelar evento:', e));
     const avisar = Boolean(req.body?.avisar);
     if (avisar) await notif.visitaCancelada(lead, visita).catch((e) => console.error('[panel] aviso cancelación:', e));
     res.redirect(303, `/admin/lead/${lead.id}?ok=${avisar ? 'cancelada_aviso' : 'cancelada'}#visita`);
@@ -709,10 +746,14 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     res.send(vistas.confirmarEliminar({ lead, documentos: db.documentosDeLead(lead.id), visita: db.visitaVigente(lead.id), config }));
   });
 
-  app.post('/admin/lead/:id/eliminar', formAdmin, (req, res) => {
+  app.post('/admin/lead/:id/eliminar', formAdmin, async (req, res) => {
     const lead = leadAdmin(req, res);
     if (!lead) return;
     if (!req.body?.confirmo) return res.redirect(303, `/admin/lead/${lead.id}/eliminar`);
+    const visitaVigente = db.visitaVigente(lead.id);
+    if (visitaVigente) {
+      await notif.eventoCancelado(lead, visitaVigente, 'El interesado fue eliminado del sistema.').catch((e) => console.error('[panel] cancelar evento:', e));
+    }
     const rutas = db.eliminarLead(lead.id);
     for (const r of rutas) fs.rmSync(r, { force: true });
     fs.rmSync(path.join(config.uploadsDir, String(lead.id)), { recursive: true, force: true });

@@ -1,7 +1,10 @@
 const fs = require('node:fs');
 const { esc, formatearRut, firmar, tamanoLegible } = require('./utils');
 const { REQUISITOS, nombreRequisito, textoRequisitosWhatsapp } = require('./requisitos');
-const { describirBloque, generarICS } = require('./agenda');
+const { describirBloque, generarICS, horaTexto } = require('./agenda');
+
+// Número de versión creciente para que los calendarios reemplacen el evento anterior
+const secuenciaActual = () => Math.floor(Date.now() / 1000) - 1_700_000_000;
 
 function crearNotificaciones({ config, mailer, whatsapp, db }) {
   const linkPostular = (lead) => `${config.baseUrl}/postular/${lead.token}`;
@@ -211,6 +214,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     async recordatorioVisita(lead, visita) {
       const cuando = describirBloque(visita.fecha, visita.hora);
       const link = linkAgenda(lead);
+      const confirmar = `${config.baseUrl}/visita/${lead.token}/confirmar`;
       await mailer.enviar({
         to: lead.email,
         subject: `Recordatorio: tu visita es mañana – ${cuando}`,
@@ -219,13 +223,13 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
           `<p>Hola ${esc(primerNombre(lead))},</p><p>Te recordamos tu visita de mañana:</p>
            <p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
            ${lead.propiedad ? `<p>🏠 ${esc(lead.propiedad)}</p>` : ''}
-           <p>Si no puedes asistir, por favor cambia el horario para dejar el bloque disponible:</p>
-           ${boton('Cambiar horario', link, '#111417')}`
+           <p>Por favor confírmanos tu asistencia, o elige otro horario si no puedes asistir:</p>
+           ${boton('✅ Confirmar asistencia', confirmar)} ${boton('📅 Reagendar', link, '#111417')}`
         ),
       });
       await enviarWhatsappSeguro(
         lead,
-        `Hola ${primerNombre(lead)} 👋 Te recordamos tu visita de mañana: *${cuando}*. Si no puedes asistir, cambia el horario aquí: ${link}`
+        `Hola ${primerNombre(lead)} 👋 Te recordamos tu visita de mañana: *${cuando}*.\n✅ Confirma tu asistencia: ${confirmar}\n📅 Si no puedes, reagenda aquí: ${link}`
       );
     },
 
@@ -241,6 +245,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
             `<p>Hola ${esc(primerNombre(lead))},</p><p>Tuvimos que cancelar tu visita del <strong>${esc(cuando)}</strong>. Disculpa las molestias.</p>
              <p>Puedes elegir un nuevo horario aquí:</p>${boton('📅 Elegir nuevo horario', link)}`
           ),
+          icalEvent: { method: 'CANCEL', filename: 'visita.ics', content: this.eventoInteresado(lead, visita, { metodo: 'CANCEL' }) },
         })
         .catch((e) => console.error('[correo] aviso de cancelación falló:', e.message));
       await enviarWhatsappSeguro(
@@ -251,53 +256,137 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     },
 
     // 3) Visita agendada -> Julio, Bárbara y C. Solís de Ovando + confirmación al interesado
-    async visitaAgendada(lead, visita, reagendada = false) {
-      const cuando = describirBloque(visita.fecha, visita.hora);
-      const ics = generarICS({
-        uid: `visita-${visita.id}@sdorent.cl`,
+    // Evento de calendario del equipo: toda la información en el título y el detalle (para verlo en terreno)
+    eventoEquipo(lead, visita, { metodo = 'REQUEST' } = {}) {
+      const direccion = lead.propiedad || 'Dirección por confirmar';
+      const tel = lead.telefono ? `+${lead.telefono}` : 'sin teléfono';
+      const confirmada = Boolean(visita.confirmada_at);
+      const titulo = `${confirmada ? '✅ CONFIRMADA · ' : ''}Visita ${horaTexto(visita.hora)} · ${direccion} · ${lead.nombre || 'Interesado'} ${tel}`;
+      const descripcion = [
+        `VISITA ${config.empresa.nombre.toUpperCase()}`,
+        `📅 ${describirBloque(visita.fecha, visita.hora)}`,
+        confirmada ? '✅ El interesado CONFIRMÓ su asistencia' : '⏳ Pendiente de confirmación del interesado',
+        '',
+        `🏠 Propiedad: ${direccion}`,
+        lead.url_publicacion ? `🔗 Aviso: ${lead.url_publicacion}` : null,
+        lead.propiedad ? `📍 Mapa: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.propiedad)}` : null,
+        '',
+        `👤 Interesado: ${lead.nombre || '-'}${lead.rut ? ` (RUT ${formatearRut(lead.rut)})` : ''}`,
+        `📞 Teléfono: ${tel}`,
+        lead.telefono ? `💬 WhatsApp: https://wa.me/${lead.telefono}` : null,
+        lead.email ? `✉️ Correo: ${lead.email}` : null,
+        lead.tipo ? `💼 ${REQUISITOS[lead.tipo]?.etiqueta || lead.tipo}${lead.razon_social ? ` · ${lead.razon_social}` : ''}` : null,
+        lead.complementa
+          ? `👥 Complementa renta: ${lead.comp_nombre || ''}${lead.comp_telefono ? ` +${lead.comp_telefono}` : ''}${lead.comp_relacion ? ` (${lead.comp_relacion})` : ''}`
+          : null,
+        lead.portal ? `📣 Origen: ${lead.portal}` : null,
+        '',
+        `📂 Ficha y documentos: ${config.baseUrl}/admin/lead/${lead.id}`,
+      ]
+        .filter((l) => l !== null)
+        .join('\n');
+      return generarICS({
+        uid: `visita-interesado-${lead.id}@sdorent.cl`,
+        secuencia: secuenciaActual(),
+        metodo,
         fecha: visita.fecha,
         hora: visita.hora,
         duracionMinutos: config.agenda.duracionMinutos,
         zona: config.zonaHoraria,
-        titulo: `Visita propiedad – ${lead.nombre}`,
-        descripcion: `Interesado: ${lead.nombre}\nTeléfono: +${lead.telefono || ''}\nCorreo: ${lead.email || ''}\nPropiedad: ${lead.propiedad || '-'}\nAviso: ${lead.url_publicacion || '-'}\nOrigen: ${lead.portal || '-'}`,
+        titulo,
+        descripcion,
         ubicacion: lead.propiedad || '',
-        organizador: config.correo.documentos[0],
-        asistentes: [...config.correo.visitas, lead.email].filter(Boolean),
+        url: `${config.baseUrl}/admin/lead/${lead.id}`,
+        organizador: config.correo.from.match(/<([^>]+)>/)?.[1] || config.correo.documentos[0],
+        asistentes: config.correo.visitas,
       });
-      const adjuntoIcs = { filename: 'visita.ics', content: ics, contentType: 'text/calendar; charset=utf-8; method=REQUEST' };
+    },
 
+    // Evento para el interesado (otro identificador, sin datos internos)
+    eventoInteresado(lead, visita, { metodo = 'REQUEST' } = {}) {
+      return generarICS({
+        uid: `visita-cliente-${lead.id}@sdorent.cl`,
+        secuencia: secuenciaActual(),
+        metodo,
+        fecha: visita.fecha,
+        hora: visita.hora,
+        duracionMinutos: config.agenda.duracionMinutos,
+        zona: config.zonaHoraria,
+        titulo: `Visita propiedad ${config.empresa.nombre}${lead.propiedad ? ` – ${lead.propiedad}` : ''}`,
+        descripcion: `Visita a la propiedad${lead.propiedad ? ` ${lead.propiedad}` : ''}.\nSi necesitas cambiar el horario: ${linkAgenda(lead)}`,
+        ubicacion: lead.propiedad || '',
+        organizador: config.correo.from.match(/<([^>]+)>/)?.[1] || config.correo.documentos[0],
+        asistentes: [lead.email].filter(Boolean),
+      });
+    },
+
+    // 3) Visita agendada -> Cristian, José, sdopropiedades@ y Julio (con evento de calendario) + confirmación al interesado
+    async visitaAgendada(lead, visita, reagendada = false) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
       await mailer.enviar({
         to: config.correo.visitas,
-        subject: `${reagendada ? '🔁 Visita REAGENDADA' : '📅 Nueva visita agendada'}: ${cuando} – ${lead.nombre}`,
+        subject: `${reagendada ? '🔁 Visita REAGENDADA' : '📅 Nueva visita'}: ${cuando} · ${lead.propiedad || 'propiedad por confirmar'} · ${lead.nombre}`,
         html: correoHTML(
           reagendada ? 'Visita reagendada' : 'Nueva visita agendada',
-          `<p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>${tablaLead(lead)}
+          `<p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
+           ${reagendada ? '<p>El interesado cambió el horario. El evento de tu calendario se actualizó con la nueva hora.</p>' : '<p>La visita se agregó a tu calendario con toda la información.</p>'}
+           ${tablaLead(lead)}
            <p>${boton('WhatsApp al interesado', `https://wa.me/${lead.telefono}`)} ${boton('Ver ficha y documentos', `${config.baseUrl}/admin/lead/${lead.id}`, '#111417')} ${boton('Calendario', `${config.baseUrl}/admin/calendario`, '#111417')}</p>`
         ),
-        icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: ics },
+        icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: this.eventoEquipo(lead, visita) },
       });
 
       await mailer
         .enviar({
           to: lead.email,
-          subject: `Visita confirmada: ${cuando} – ${config.empresa.nombre}`,
+          subject: `Visita agendada: ${cuando} – ${config.empresa.nombre}`,
           html: correoHTML(
-            'Visita confirmada',
+            'Visita agendada',
             `<p>Hola ${esc(primerNombre(lead))},</p><p>Tu visita quedó agendada para el:</p>
              <p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
              ${lead.propiedad ? `<p>🏠 ${esc(lead.propiedad)}</p>` : ''}
-             <p>Te contactaremos por WhatsApp para coordinar los detalles. Si necesitas cambiar el horario:</p>
+             <p>El día anterior te enviaremos un recordatorio para confirmar tu asistencia. Si necesitas cambiar el horario:</p>
              ${boton('Cambiar horario', linkAgenda(lead), '#111417')}`
           ),
-          attachments: [adjuntoIcs],
+          icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: this.eventoInteresado(lead, visita) },
         })
         .catch((e) => console.error('[correo] confirmación de visita al interesado falló:', e.message));
 
       await enviarWhatsappSeguro(
         lead,
-        `✅ ¡Listo ${primerNombre(lead)}! Tu visita quedó agendada para el *${cuando}*. Te escribiremos para coordinar los detalles. Si necesitas cambiarla: ${linkAgenda(lead)}`
+        `✅ ¡Listo ${primerNombre(lead)}! Tu visita quedó agendada para el *${cuando}*. Si necesitas cambiarla: ${linkAgenda(lead)}`
       );
+    },
+
+    // El interesado confirmó desde el recordatorio: se actualiza el evento del equipo (título con ✅ CONFIRMADA)
+    async asistenciaConfirmada(lead, visita) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      await mailer.enviar({
+        to: config.correo.visitas,
+        subject: `✅ Visita CONFIRMADA por el interesado: ${cuando} · ${lead.propiedad || ''} · ${lead.nombre}`,
+        html: correoHTML(
+          'Visita confirmada',
+          `<p style="font-size:18px">✅ <strong>${esc(lead.nombre)}</strong> confirmó que asistirá el <strong>${esc(cuando)}</strong>.</p>
+           <p>El evento de tu calendario se actualizó.</p>${tablaLead(lead)}
+           <p>${boton('WhatsApp al interesado', `https://wa.me/${lead.telefono}`)} ${boton('Ver ficha', `${config.baseUrl}/admin/lead/${lead.id}`, '#111417')}</p>`
+        ),
+        icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: this.eventoEquipo(lead, visita) },
+      });
+    },
+
+    // Quita la visita del calendario del equipo
+    async eventoCancelado(lead, visita, motivo) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      await mailer.enviar({
+        to: config.correo.visitas,
+        subject: `❌ Visita CANCELADA: ${cuando} · ${lead.propiedad || ''} · ${lead.nombre}`,
+        html: correoHTML(
+          'Visita cancelada',
+          `<p style="font-size:18px">❌ Se canceló la visita del <strong>${esc(cuando)}</strong> con ${esc(lead.nombre)}.</p>
+           ${motivo ? `<p>${esc(motivo)}</p>` : ''}<p>El evento se quitó de tu calendario.</p>${tablaLead(lead)}`
+        ),
+        icalEvent: { method: 'CANCEL', filename: 'visita.ics', content: this.eventoEquipo(lead, visita, { metodo: 'CANCEL' }) },
+      });
     },
   };
 }

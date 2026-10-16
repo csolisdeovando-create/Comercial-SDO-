@@ -99,35 +99,77 @@ function bloqueValido(cfg, fecha, hora, ahora = new Date()) {
   );
 }
 
-// Invitación de calendario (.ics) para Google Calendar / Outlook
-function generarICS({ uid, fecha, hora, duracionMinutos, zona, titulo, descripcion, ubicacion, organizador, asistentes = [] }) {
+// Invitación de calendario (.ics) para Google Calendar / Outlook.
+// Mismo `uid` + `secuencia` mayor = actualiza el evento existente (reagendar, confirmar);
+// metodo 'CANCEL' lo elimina del calendario.
+function generarICS({
+  uid,
+  fecha,
+  hora,
+  duracionMinutos,
+  zona,
+  titulo,
+  descripcion,
+  ubicacion,
+  url,
+  organizador,
+  asistentes = [],
+  metodo = 'REQUEST',
+  secuencia = 0,
+  alarmaMinutos = 60,
+}) {
   const [y, m, d] = fecha.split('-');
   const ini = `${y}${m}${d}T${String(hora).padStart(2, '0')}0000`;
   const finMin = hora * 60 + duracionMinutos;
   const fin = `${y}${m}${d}T${String(Math.floor(finMin / 60)).padStart(2, '0')}${String(finMin % 60).padStart(2, '0')}00`;
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-  const esc = (s = '') => String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
+  const esc = (s = '') => String(s).replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
+  const cancelar = metodo === 'CANCEL';
   const lineas = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//SDO Rent//Agenda Comercial//ES',
     'CALSCALE:GREGORIAN',
-    'METHOD:REQUEST',
+    `METHOD:${metodo}`,
     'BEGIN:VEVENT',
     `UID:${uid}`,
+    `SEQUENCE:${secuencia}`,
     `DTSTAMP:${stamp}`,
     `DTSTART;TZID=${zona}:${ini}`,
     `DTEND;TZID=${zona}:${fin}`,
     `SUMMARY:${esc(titulo)}`,
     `DESCRIPTION:${esc(descripcion)}`,
     ubicacion ? `LOCATION:${esc(ubicacion)}` : null,
+    url ? `URL:${url}` : null,
     organizador ? `ORGANIZER;CN=SDO Rent:mailto:${organizador}` : null,
-    ...asistentes.map((a) => `ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:${a}`),
-    'STATUS:CONFIRMED',
+    ...asistentes.map((a) => `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=FALSE:mailto:${a}`),
+    `STATUS:${cancelar ? 'CANCELLED' : 'CONFIRMED'}`,
+    ...(!cancelar && alarmaMinutos
+      ? ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${esc(titulo)}`, `TRIGGER:-PT${alarmaMinutos}M`, 'END:VALARM']
+      : []),
     'END:VEVENT',
     'END:VCALENDAR',
   ].filter(Boolean);
-  return lineas.join('\r\n') + '\r\n';
+  return lineas.map(plegarLinea).join('\r\n') + '\r\n';
+}
+
+// Las líneas de un .ics no deben superar 75 bytes; las largas se continúan con un espacio
+function plegarLinea(linea) {
+  const partes = [];
+  let actual = '';
+  let bytes = 0;
+  for (const ch of linea) {
+    const n = Buffer.byteLength(ch);
+    if (bytes + n > (partes.length ? 74 : 75)) {
+      partes.push(actual);
+      actual = '';
+      bytes = 0;
+    }
+    actual += ch;
+    bytes += n;
+  }
+  partes.push(actual);
+  return partes.join('\r\n ');
 }
 
 module.exports = {

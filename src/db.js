@@ -75,6 +75,7 @@ function migrar(db) {
   if (!visitas.includes('resultado')) db.exec('ALTER TABLE visitas ADD COLUMN resultado TEXT');
   if (!visitas.includes('notas')) db.exec('ALTER TABLE visitas ADD COLUMN notas TEXT');
   if (!visitas.includes('resultado_at')) db.exec('ALTER TABLE visitas ADD COLUMN resultado_at TEXT');
+  if (!visitas.includes('confirmada_at')) db.exec('ALTER TABLE visitas ADD COLUMN confirmada_at TEXT');
   if (!visitas.includes('recordatorio_at')) db.exec('ALTER TABLE visitas ADD COLUMN recordatorio_at TEXT');
   const leads = columnas('leads');
   if (!leads.includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
@@ -206,6 +207,8 @@ function crearRepositorio(db) {
           `SELECT * FROM visitas WHERE estado = 'confirmada' AND fecha = ? AND recordatorio_at IS NULL AND resultado IS NULL`
         )
         .all(fecha),
+    confirmarAsistencia: (visitaId) =>
+      db.prepare(`UPDATE visitas SET confirmada_at = datetime('now') WHERE id = ? AND confirmada_at IS NULL`).run(visitaId),
     marcarRecordatorio: (visitaId) =>
       db.prepare(`UPDATE visitas SET recordatorio_at = datetime('now') WHERE id = ?`).run(visitaId),
     cancelarVisita: (visitaId) => db.prepare(`UPDATE visitas SET estado = 'cancelada' WHERE id = ?`).run(visitaId),

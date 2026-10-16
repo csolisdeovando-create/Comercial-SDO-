@@ -227,3 +227,6 @@ a.cifra:hover, a.cifra.activa { box-shadow: 0 0 0 2px var(--azul); }
 fieldset.docs[data-grupo=comp] legend { color: var(--verde-texto); }
 .sep-comp { font-size: 17px; margin: 18px 0 4px; padding-top: 14px; border-top: 2px solid var(--turquesa); color: var(--azul); }
 .tag-comp { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 99px; background: var(--verde-claro); color: var(--verde-texto); white-space: nowrap; }
+
+.confirmo { color: var(--verde-texto); font-weight: 700; margin: 4px 0; }
+.acciones-centradas { margin: 16px 0 8px; }

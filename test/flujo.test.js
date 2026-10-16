@@ -143,8 +143,8 @@ test('flujo completo de un lead', async (t) => {
   r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|9' }), redirect: 'manual' });
   assert.strictEqual(r.status, 303);
   assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'agendado');
-  const aEquipo = ctx.correos.find((c) => /Nueva visita agendada/.test(c.subject));
-  assert.deepStrictEqual(aEquipo.to, ['julio.mendoza@sdorent.cl', 'barbara.diaz@sdorent.cl', 'csolisdeovando@sdocapital.cl', 'josecano@sdorent.cl']);
+  const aEquipo = ctx.correos.find((c) => /Nueva visita/.test(c.subject));
+  assert.deepStrictEqual(aEquipo.to, ['julio.mendoza@sdorent.cl', 'sdopropiedades@sdorent.cl', 'csolisdeovando@sdocapital.cl', 'josecano@sdorent.cl']);
   assert.match(aEquipo.subject, /Viernes 16 de octubre a las 09:00/);
   assert.match(aEquipo.icalEvent.content, /DTSTART;TZID=America\/Santiago:20261016T090000/);
   assert.match(ctx.wa.at(-1).texto, /Viernes 16 de octubre a las 09:00/);
@@ -461,7 +461,9 @@ test('recordatorio de visita el día anterior', async (t) => {
   assert.strictEqual(await ctx.app.locals.enviarRecordatorios(), 1);
   const correo = ctx.correos.find((c) => c.to === 'pedro@example.com');
   assert.match(correo.subject, /Recordatorio: tu visita es mañana – Viernes 16 de octubre a las 11:00 hrs/);
-  assert.ok(correo.html.includes(`/agendar/${lead.token}`));
+  assert.ok(correo.html.includes(`/agendar/${lead.token}`), 'botón reagendar');
+  assert.ok(correo.html.includes(`/visita/${lead.token}/confirmar`), 'botón confirmar');
+  assert.match(correo.html, /Confirmar asistencia/);
   // No se repite
   assert.strictEqual(await ctx.app.locals.enviarRecordatorios(), 0);
 });
@@ -521,4 +523,54 @@ test('complemento de renta: datos y mismos documentos de quien complementa', asy
   const sinComp = ctx.db.leadPorTelefono('56933334444');
   assert.strictEqual(sinComp.complementa, 0);
   assert.strictEqual(ctx.db.documentosDeLead(sinComp.id).length, 6);
+});
+
+test('evento de calendario del equipo: información completa, confirmación, reagendar y cancelar', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const lead = ctx.db.crearLead({
+    telefono: '56987654321', nombre: 'Juan Pérez Soto', email: 'juan@example.com', rut: '111111111', tipo: 'dependiente',
+    propiedad: 'Rosario Sur 91, depto 504, Las Condes', url_publicacion: 'https://departamento.mercadolibre.cl/MLC-1-x-_JM', estado: 'aprobado',
+  });
+  await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|9' }) });
+  const ev1 = ctx.correos.find((c) => /Nueva visita/.test(c.subject)).icalEvent.content.replace(/\r\n /g, '');
+  assert.match(ev1, /SUMMARY:Visita 09:00 · Rosario Sur 91\\, depto 504\\, Las Condes · Juan Pérez Soto \+56987654321/);
+  assert.match(ev1, /LOCATION:Rosario Sur 91\\, depto 504\\, Las Condes/);
+  assert.match(ev1, /wa\.me\/56987654321/);
+  assert.match(ev1, /google\.com\/maps/);
+  assert.match(ev1, /Ficha y documentos: http/);
+  assert.match(ev1, /TRIGGER:-PT60M/);
+  const uid = ev1.match(/UID:(.*)/)[1];
+  assert.doesNotMatch(ev1, /ATTENDEE.*juan@example\.com/, 'el interesado no va en el evento interno');
+
+  // Confirmar asistencia: GET solo muestra el botón; POST confirma y actualiza el evento del equipo
+  let r = await fetch(`${ctx.url}/visita/${lead.token}/confirmar`);
+  assert.match(await r.text(), /Sí, confirmo mi asistencia/);
+  assert.strictEqual(ctx.db.visitaVigente(lead.id).confirmada_at, null);
+  r = await fetch(`${ctx.url}/visita/${lead.token}/confirmar`, { method: 'POST', redirect: 'manual' });
+  assert.strictEqual(r.status, 303);
+  assert.ok(ctx.db.visitaVigente(lead.id).confirmada_at);
+  const conf = ctx.correos.find((c) => /CONFIRMADA por el interesado/.test(c.subject));
+  const ev2 = conf.icalEvent.content.replace(/\r\n /g, '');
+  assert.match(ev2, /SUMMARY:✅ CONFIRMADA · Visita 09:00/);
+  assert.strictEqual(ev2.match(/UID:(.*)/)[1], uid, 'mismo evento');
+  assert.match(await (await fetch(`${ctx.url}/visita/${lead.token}/confirmar`)).text(), /Ya confirmaste/);
+  assert.match(await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text(), /El interesado confirmó su asistencia/);
+
+  // Reagendar actualiza el mismo evento (no crea uno nuevo)
+  await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|13' }) });
+  const ev3 = ctx.correos.find((c) => /REAGENDADA/.test(c.subject)).icalEvent.content.replace(/\r\n /g, '');
+  assert.strictEqual(ev3.match(/UID:(.*)/)[1], uid);
+  assert.match(ev3, /DTSTART;TZID=America\/Santiago:20261016T130000/);
+  assert.ok(Number(ev3.match(/SEQUENCE:(\d+)/)[1]) >= Number(ev1.match(/SEQUENCE:(\d+)/)[1]));
+
+  // Cancelar desde el panel quita el evento del calendario del equipo
+  r = await fetch(`${ctx.url}/admin/lead/${lead.id}/visita/cancelar`, { method: 'POST', headers: h, body: new URLSearchParams({}), redirect: 'manual' });
+  assert.strictEqual(r.status, 303);
+  const canc = ctx.correos.find((c) => /Visita CANCELADA/.test(c.subject));
+  assert.strictEqual(canc.icalEvent.method, 'CANCEL');
+  assert.match(canc.icalEvent.content, /METHOD:CANCEL/);
+  assert.match(canc.icalEvent.content, /STATUS:CANCELLED/);
+  assert.strictEqual(canc.icalEvent.content.replace(/\r\n /g, '').match(/UID:(.*)/)[1], uid);
 });

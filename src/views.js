@@ -507,6 +507,7 @@ function seccionVisita(lead, visita) {
   return `<section class="tarjeta" id="visita">
     <div class="titulo-seccion">
       <div><h1>Visita</h1><p class="cuando-visita">📅 ${esc(cuando)}</p>
+      <p class="${visita.confirmada_at ? 'confirmo' : 'nota'}">${visita.confirmada_at ? '✅ El interesado confirmó su asistencia' : '⏳ El interesado aún no confirma (se le pide el día anterior)'}</p>
       ${lead.propiedad ? `<p class="nota">🏠 ${esc(lead.propiedad)}</p>` : ''}</div>
       ${visita.resultado ? `<span class="estado ${visita.resultado === 'realizada' ? 'agendado' : visita.resultado === 'no_continua' ? 'rechazado' : 'documentos_recibidos'}">${RESULTADO_VISITA[visita.resultado]}</span>` : '<span class="estado aprobado">Pendiente</span>'}
     </div>
@@ -593,7 +594,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, proximas, config
                       <strong>${esc(v.nombre)}</strong>
                       <span>+${esc(v.telefono || '')}</span>
                       ${v.propiedad ? `<span class="prop">🏠 ${esc(v.propiedad)}</span>` : ''}
-                      ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : ''}
+                      ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : v.confirmada_at ? '<span class="res">✅ Confirmó asistencia</span>' : ''}
                     </a>`
                   )
                   .join('')}</td>`;
