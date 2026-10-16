@@ -33,9 +33,25 @@ const sumarDias = (fecha, n) => {
 };
 const diaSemana = (fecha) => aUTC(fecha).getUTCDay();
 
-function esDiaHabil(fecha, feriados = []) {
-  const d = diaSemana(fecha);
-  return d >= 1 && d <= 5 && !feriados.includes(fecha);
+const DIAS_POR_DEFECTO = [1, 2, 3, 4, 5];
+
+function esDiaHabil(fecha, feriados = [], diasSemana = DIAS_POR_DEFECTO) {
+  return diasSemana.includes(diaSemana(fecha)) && !feriados.includes(fecha);
+}
+
+// Horas de visita de una fecha (los sábados pueden tener otro horario)
+function horasDe(cfg, fecha) {
+  return diaSemana(fecha) === 6 && cfg.horasSabado?.length ? cfg.horasSabado : cfg.horas;
+}
+
+// Días de la semana que se muestran como columnas (1 = lunes … 6 = sábado)
+const columnasSemana = (cfg) => [...(cfg.diasSemana || DIAS_POR_DEFECTO)].filter((d) => d >= 1 && d <= 6).sort((a, b) => a - b);
+
+// "lunes a viernes" / "lunes a sábado"
+function textoDias(cfg) {
+  const cols = columnasSemana(cfg);
+  const nombre = ['', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  return cols.length > 1 ? `${nombre[cols[0]]} a ${nombre[cols[cols.length - 1]]}` : nombre[cols[0]];
 }
 
 const horaTexto = (h) => `${String(h).padStart(2, '0')}:00`;
@@ -60,24 +76,25 @@ function construirCalendario(cfg, ocupacion = new Map(), ahora = new Date()) {
   const limiteMinutos = minutos + cfg.anticipacionHoras * 60;
 
   // Días hábiles a ofrecer, partiendo hoy
+  const cols = columnasSemana(cfg);
   const dias = [];
   for (let f = hoy; dias.length < cfg.diasHabiles; f = sumarDias(f, 1)) {
-    if (esDiaHabil(f, cfg.feriados)) dias.push(f);
+    if (esDiaHabil(f, cfg.feriados, cols)) dias.push(f);
   }
 
   const semanas = new Map();
   for (const fecha of dias) {
-    const lunes = sumarDias(fecha, 1 - diaSemana(fecha));
+    const lunes = sumarDias(fecha, 1 - (diaSemana(fecha) || 7));
     if (!semanas.has(lunes)) {
-      // Siempre se muestran las 5 columnas de la semana (lun-vie)
+      // Siempre se muestran todas las columnas de la semana (lun-vie o lun-sáb)
       semanas.set(
         lunes,
-        [0, 1, 2, 3, 4].map((i) => ({ fecha: sumarDias(lunes, i), habilitado: false, bloques: [] }))
+        cols.map((d) => ({ fecha: sumarDias(lunes, d - 1), habilitado: false, bloques: [] }))
       );
     }
-    const dia = semanas.get(lunes)[diaSemana(fecha) - 1];
+    const dia = semanas.get(lunes)[cols.indexOf(diaSemana(fecha))];
     dia.habilitado = true;
-    dia.bloques = cfg.horas.map((hora) => {
+    dia.bloques = horasDe(cfg, fecha).map((hora) => {
       const ocupados = ocupacion.get(`${fecha} ${hora}`) || 0;
       const pasado = fecha < hoy || (fecha === hoy && hora * 60 < limiteMinutos);
       return { fecha, hora, disponible: !pasado && ocupados < cfg.cuposPorBloque };
@@ -173,6 +190,10 @@ function plegarLinea(linea) {
 }
 
 module.exports = {
+  horasDe,
+  columnasSemana,
+  textoDias,
+  diaSemana,
   ahoraEnZona,
   construirCalendario,
   bloqueValido,

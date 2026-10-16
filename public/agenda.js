@@ -25,7 +25,7 @@
   form.addEventListener('change', function (e) {
     if (e.target.name !== 'bloque') return;
     var dia = e.target.closest('.dia');
-    var nombre = dia.querySelector('.dia-nombre').textContent;
+    var nombre = dia.querySelector('.dia-nombre .largo').textContent;
     var fecha = dia.querySelector('.dia-fecha').textContent;
     resumen.hidden = false;
     resumen.querySelector('strong').textContent = nombre + ' ' + fecha + ' a las ' + e.target.nextElementSibling.textContent + ' hrs';

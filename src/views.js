@@ -1,6 +1,6 @@
 const { esc, formatearRut, tamanoLegible } = require('./utils');
 const { REQUISITOS, nombreRequisito } = require('./requisitos');
-const { fechaLarga, horaTexto, describirBloque, sumarDias } = require('./agenda');
+const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSemana, textoDias } = require('./agenda');
 
 function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true } = {}) {
   const menu = nav
@@ -187,13 +187,14 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
 function calendario({ lead, cal, visita, error, config }) {
   const cabecera = (fecha) => {
     const [nombre, ...resto] = fechaLarga(fecha).split(' ');
-    return `<span class="dia-nombre">${esc(nombre)}</span><span class="dia-fecha">${esc(resto.join(' ').replace(' de ', ' '))}</span>`;
+    const corto = { miércoles: 'mié', sábado: 'sáb' }[nombre] || nombre.slice(0, 3);
+    return `<span class="dia-nombre"><span class="largo">${esc(nombre)}</span><span class="corto">${esc(corto)}</span></span><span class="dia-fecha">${esc(resto.join(' ').replace(' de ', ' '))}</span>`;
   };
   const semanas = cal.semanas
     .map(
       (s, i) => `
     <div class="semana" data-semana="${i}" ${i === 0 ? '' : 'hidden'}>
-      <div class="dias">
+      <div class="dias" style="--ndias:${s.dias.length}">
         ${s.dias
           .map(
             (d) => `
@@ -201,9 +202,9 @@ function calendario({ lead, cal, visita, error, config }) {
             <div class="dia-cab">${cabecera(d.fecha)}</div>
             ${
               d.habilitado
-                ? config.agenda.horas
-                    .map((h) => {
-                      const b = d.bloques.find((x) => x.hora === h);
+                ? d.bloques
+                    .map((b) => {
+                      const h = b.hora;
                       const id = `b-${d.fecha}-${h}`;
                       return b && b.disponible
                         ? `<input type="radio" name="bloque" id="${id}" value="${d.fecha}|${h}"><label for="${id}" class="bloque">${horaTexto(h)}</label>`
@@ -224,7 +225,7 @@ function calendario({ lead, cal, visita, error, config }) {
     'Agenda tu visita',
     `<section class="tarjeta">
       <h1>Agenda tu visita</h1>
-      <p class="lead">Hola ${esc((lead.nombre || '').split(' ')[0])}, elige el día y la hora que te acomoden. Las visitas son de lunes a viernes.</p>
+      <p class="lead">Hola ${esc((lead.nombre || '').split(' ')[0])}, elige el día y la hora que te acomoden. Las visitas son de ${esc(textoDias(config.agenda))}.</p>
       ${lead.propiedad ? `<p class="propiedad">🏠 ${esc(lead.propiedad)}</p>` : ''}
       ${visita ? `<div class="alerta ok">Ya tienes una visita agendada para el <strong>${esc(describirBloque(visita.fecha, visita.hora))}</strong>. Si eliges otro horario, la reagendaremos.</div>` : ''}
       ${error ? `<div class="alerta error">${esc(error)}</div>` : ''}
@@ -412,7 +413,7 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
   );
 }
 
-function fichaAdmin({ lead, documentos, visita, firma, aviso, config }) {
+function fichaAdmin({ lead, documentos, visita, disponibles, firma, aviso, config }) {
   const requisitos = REQUISITOS[lead.tipo]?.documentos || [];
   const grupos = requisitos.map((r, i) => ({ ...r, n: i + 1, docs: documentos.filter((d) => d.requisito === r.campo) }));
   const reqComp = lead.complementa ? (REQUISITOS[lead.comp_tipo]?.documentos || []).map((r) => ({ ...r, campo: `comp_${r.campo}` })) : [];
@@ -481,7 +482,7 @@ function fichaAdmin({ lead, documentos, visita, firma, aviso, config }) {
       }
     </section>
 
-    ${seccionVisita(lead, visita)}
+    ${seccionVisita(lead, visita, disponibles)}
 
     <section class="tarjeta zona-peligro">
       <div class="titulo-seccion">
@@ -494,19 +495,45 @@ function fichaAdmin({ lead, documentos, visita, firma, aviso, config }) {
   );
 }
 
-function seccionVisita(lead, visita) {
+// Selector de horarios libres para que el equipo agende o reagende
+function formAgendar(lead, disponibles, reagendar) {
+  const grupos = (disponibles?.semanas || [])
+    .flatMap((s) => s.dias)
+    .filter((d) => d.habilitado && d.bloques.some((b) => b.disponible))
+    .map(
+      (d) =>
+        `<optgroup label="${esc(describirBloque(d.fecha, 0).replace(/ a las .*/, ''))}">${d.bloques
+          .filter((b) => b.disponible)
+          .map((b) => `<option value="${b.fecha}|${b.hora}">${esc(describirBloque(b.fecha, b.hora))}</option>`)
+          .join('')}</optgroup>`
+    )
+    .join('');
+  if (!grupos) return '<p class="nota">No hay horarios libres en los próximos días.</p>';
+  return `<form method="post" action="/admin/lead/${lead.id}/visita/agendar" class="form-agendar">
+      <label for="bloque-equipo"><strong>${reagendar ? '🔁 Reagendar: elegir nueva fecha y hora' : '📅 Agendar visita (coordinada por el equipo)'}</strong></label>
+      <div class="fila-agendar">
+        <select id="bloque-equipo" name="bloque" required><option value="">Elige un horario libre…</option>${grupos}</select>
+        <button class="boton primario">${reagendar ? 'Reagendar' : 'Agendar'}</button>
+      </div>
+      <label class="check"><input type="checkbox" name="avisar" value="1" checked> Avisar al interesado (correo y WhatsApp) con la ${reagendar ? 'nueva ' : ''}hora</label>
+    </form>`;
+}
+
+function seccionVisita(lead, visita, disponibles) {
+  const puedeAgendarEquipo = ['aprobado', 'agendado', 'no_asistio'].includes(lead.estado);
   if (!visita) {
     return `<section class="tarjeta" id="visita"><h1>Visita</h1>
       <p class="nota">${
         ['aprobado'].includes(lead.estado)
-          ? 'Aprobado: esperando que el interesado elija un horario en el calendario.'
+          ? 'Aprobado: esperando que el interesado elija un horario en el calendario. También puedes agendarla tú si la coordinaron por teléfono.'
           : 'Aún no tiene visita agendada. El calendario se envía al aprobar sus documentos.'
-      }</p></section>`;
+      }</p>${puedeAgendarEquipo ? formAgendar(lead, disponibles, false) : ''}</section>`;
   }
   const cuando = describirBloque(visita.fecha, visita.hora);
   if (visita.estado === 'cancelada') {
     return `<section class="tarjeta" id="visita"><h1>Visita</h1>
-      <p>La visita del <strong>${esc(cuando)}</strong> fue <strong>cancelada</strong>.${lead.estado === 'aprobado' ? ' El interesado puede elegir otro horario con su link.' : ''}</p></section>`;
+      <p>La visita del <strong>${esc(cuando)}</strong> fue <strong>cancelada</strong>.${lead.estado === 'aprobado' ? ' El interesado puede elegir otro horario con su link.' : ''}</p>
+      ${puedeAgendarEquipo ? formAgendar(lead, disponibles, false) : ''}</section>`;
   }
   const opcion = (valor) =>
     `<label class="opcion-resultado"><input type="radio" name="resultado" value="${valor}" ${visita.resultado === valor ? 'checked' : ''} required><span>${RESULTADO_VISITA[valor]}</span></label>`;
@@ -527,12 +554,15 @@ function seccionVisita(lead, visita) {
       <div class="acciones-ficha"><button class="boton primario">Guardar resultado</button></div>
     </form>
     ${
-      visita.resultado
+      visita.resultado && visita.resultado !== 'no_asistio'
         ? ''
-        : `<form method="post" action="/admin/lead/${lead.id}/visita/cancelar" class="form-cancelar">
-      <label class="check"><input type="checkbox" name="avisar" value="1" checked> Avisar al interesado (correo y WhatsApp) para que elija otro horario</label>
-      <button class="boton">Cancelar esta visita</button>
-    </form>`
+        : `<div class="cambiar-visita">
+      ${formAgendar(lead, disponibles, true)}
+      <form method="post" action="/admin/lead/${lead.id}/visita/cancelar" class="form-cancelar">
+        <label class="check"><input type="checkbox" name="avisar" value="1" checked> Avisar al interesado para que él elija otro horario</label>
+        <button class="boton">Cancelar esta visita</button>
+      </form>
+    </div>`
     }
     ${visita.resultado === 'no_continua' ? `<div class="alerta error">Este interesado no continúa. Si ya no necesitas sus datos, puedes <a href="/admin/lead/${lead.id}/eliminar">eliminarlo</a>.</div>` : ''}
   </section>`;
@@ -582,11 +612,22 @@ function confirmarEliminar({ lead, documentos, visita, config }) {
   );
 }
 
-function calendarioPanel({ lunes, hoy, desplazamiento, visitas, proximas, config }) {
-  const dias = [0, 1, 2, 3, 4].map((i) => sumarDias(lunes, i));
+function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], proximas, config }) {
+  const cols = columnasSemana(config.agenda);
+  const dias = cols.map((d) => sumarDias(lunes, d - 1));
+  const horas = [...new Set(dias.flatMap((f) => horasDe(config.agenda, f)))].sort((x, y) => x - y);
   const enBloque = (f, h) => visitas.filter((v) => v.fecha === f && v.hora === h);
-  const titulo = `${fechaLarga(dias[0]).replace(/^\S+ /, '')} – ${fechaLarga(dias[4]).replace(/^\S+ /, '')}`;
+  const bloqueoDe = (f, h) => bloqueos.find((b) => b.fecha === f && (b.hora === null || b.hora === h));
+  const diaBloqueado = (f) => bloqueos.find((b) => b.fecha === f && b.hora === null);
+  const titulo = `${fechaLarga(dias[0]).replace(/^\S+ /, '')} – ${fechaLarga(dias[dias.length - 1]).replace(/^\S+ /, '')}`;
   const total = visitas.length;
+  const campoSemana = `<input type="hidden" name="semana" value="${desplazamiento}">`;
+  const botonBloquear = (f, h, texto) =>
+    `<form method="post" action="/admin/bloqueos" class="form-bloqueo">${campoSemana}<input type="hidden" name="fecha" value="${f}"><input type="hidden" name="hora" value="${h ?? ''}"><button class="boton-bloquear" title="Bloquear: el equipo no puede a esta hora">${texto}</button></form>`;
+  const botonDesbloquear = (b) =>
+    `<form method="post" action="/admin/bloqueos/${b.id}/eliminar" class="form-bloqueo">${campoSemana}<button class="boton-bloquear" title="Volver a dejar disponible">Desbloquear</button></form>`;
+  const responsable = (f) => (new Date(`${f}T00:00:00Z`).getUTCDay() === 6 ? 'Xiomara' : 'Julio');
+
   return layout(
     'Calendario de visitas',
     `<section class="tarjeta">
@@ -599,21 +640,28 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, proximas, config
           ${desplazamiento ? '<a class="boton chico" href="/admin/calendario">Hoy</a>' : ''}
         </div>
       </div>
+      <p class="nota">Toca <strong>🔒</strong> en un horario (o <strong>🔒 Día</strong>) cuando el equipo no pueda atender: deja de aparecer para los interesados.</p>
       <div class="tabla-scroll">
-      <table class="cal-panel">
+      <table class="cal-panel" style="--ndias:${dias.length}">
         <thead><tr><th></th>${dias
           .map((f) => {
             const [nombre, ...resto] = fechaLarga(f).split(' ');
             const esFeriado = config.agenda.feriados.includes(f);
-            return `<th class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''}"><span>${esc(nombre)}</span><small>${esc(resto.join(' ').replace(' de ', ' '))}${esFeriado ? ' · feriado' : ''}</small></th>`;
+            const bd = diaBloqueado(f);
+            return `<th class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${bd ? 'bloqueado' : ''}"><span>${esc(nombre)}</span><small>${esc(resto.join(' ').replace(' de ', ' '))}${esFeriado ? ' · feriado' : ''}</small>
+              <small class="responsable">${responsable(f)}</small>
+              ${f >= hoy && !esFeriado ? (bd ? botonDesbloquear(bd) : botonBloquear(f, null, '🔒 Día')) : ''}</th>`;
           })
           .join('')}</tr></thead>
-        <tbody>${config.agenda.horas
+        <tbody>${horas
           .map(
             (h) => `<tr><th class="hora">${horaTexto(h)}</th>${dias
               .map((f) => {
+                if (!horasDe(config.agenda, f).includes(h)) return '<td class="na"></td>';
                 const vs = enBloque(f, h);
-                return `<td class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''}">${vs
+                const bl = bloqueoDe(f, h);
+                const futuro = f >= hoy && !config.agenda.feriados.includes(f);
+                return `<td class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${bl ? 'bloqueado' : ''}">${vs
                   .map(
                     (v) => `<a class="visita" href="/admin/lead/${v.lead_id}">
                       <strong>${esc(v.nombre)}</strong>
@@ -622,7 +670,13 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, proximas, config
                       ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : v.confirmada_at ? '<span class="res">✅ Confirmó asistencia</span>' : ''}
                     </a>`
                   )
-                  .join('')}</td>`;
+                  .join('')}${
+                  bl
+                    ? `<div class="bloqueo">🔒 ${esc(bl.motivo || 'Bloqueado')}${bl.hora !== null && futuro ? botonDesbloquear(bl) : ''}</div>`
+                    : !vs.length && futuro
+                      ? botonBloquear(f, h, '🔒')
+                      : ''
+                }</td>`;
               })
               .join('')}</tr>`
           )

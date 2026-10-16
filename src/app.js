@@ -6,7 +6,7 @@ const multer = require('multer');
 const archiver = require('archiver');
 
 const { REQUISITOS, TIPOS, PREFIJO_COMP, esComplemento, todosLosCampos, nombreRequisito } = require('./requisitos');
-const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias } = require('./agenda');
+const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias, horasDe } = require('./agenda');
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
 const { interpretarUrl, leerPublicacion, resumenPropiedad } = require('./publicacion');
@@ -447,12 +447,33 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   // ------------------------------------------------------------------
   const puedeAgendar = (lead) => ['aprobado', 'agendado', 'no_asistio'].includes(lead.estado);
 
+  // Calendario con horarios ocupados (visitas + bloqueos del equipo)
+  function calendarioDisponible() {
+    const base = construirCalendario(cfgAgenda, new Map(), ahora());
+    const ocupacion = db.ocupacionBloques(base.desde, base.hasta, (f) => horasDe(cfgAgenda, f));
+    return construirCalendario(cfgAgenda, ocupacion, ahora());
+  }
+
   function mostrarCalendario(res, lead, error, status = 200) {
-    const cal = construirCalendario(cfgAgenda, new Map(), ahora());
-    const ocupacion = db.ocupacionBloques(cal.desde, cal.hasta);
-    res.status(status).send(
-      vistas.calendario({ lead, cal: construirCalendario(cfgAgenda, ocupacion, ahora()), visita: db.visitaVigente(lead.id), error, config })
-    );
+    res.status(status).send(vistas.calendario({ lead, cal: calendarioDisponible(), visita: db.visitaVigente(lead.id), error, config }));
+  }
+
+  // Reserva un bloque para el interesado (usada por el interesado y por el equipo). Devuelve { visita, anterior } o un error.
+  function reservar(lead, fecha, hora) {
+    if (!horasDe(cfgAgenda, fecha).includes(hora) || !bloqueValido(cfgAgenda, fecha, hora, ahora())) return { error: 'invalido' };
+    const anterior = db.visitaVigente(lead.id);
+    if (anterior && anterior.fecha === fecha && anterior.hora === hora) return { visita: anterior, anterior, sinCambio: true };
+    let visita = null;
+    try {
+      visita = db.transaccion(() => {
+        if (db.contarBloque(fecha, hora) >= config.agenda.cuposPorBloque) return null;
+        db.cancelarVisitasDeLead(lead.id);
+        return db.crearVisita(lead.id, fecha, hora);
+      });
+    } catch (e) {
+      console.error('[agenda] error al reservar:', e);
+    }
+    return visita ? { visita, anterior } : { error: 'ocupado' };
   }
 
   app.get('/agendar/:token', (req, res) => {
@@ -476,28 +497,13 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     if (!puedeAgendar(lead)) return res.redirect(303, `/agendar/${lead.token}`);
 
     const [fecha, horaTxt] = String(req.body?.bloque || '').split('|');
-    const hora = Number(horaTxt);
-    if (!config.agenda.horas.includes(hora) || !bloqueValido(cfgAgenda, fecha, hora, ahora())) {
-      return mostrarCalendario(res, lead, 'Selecciona un horario válido.', 422);
-    }
-
-    const anterior = db.visitaVigente(lead.id);
-    if (anterior && anterior.fecha === fecha && anterior.hora === hora) return res.redirect(303, `/agendar/${lead.token}/listo`);
-
-    let visita;
-    try {
-      visita = db.transaccion(() => {
-        if (db.contarBloque(fecha, hora) >= config.agenda.cuposPorBloque) return null;
-        db.cancelarVisitasDeLead(lead.id);
-        return db.crearVisita(lead.id, fecha, hora);
-      });
-    } catch (e) {
-      console.error('[agenda] error al reservar:', e);
-    }
-    if (!visita) return mostrarCalendario(res, lead, 'Ese horario se acaba de ocupar. Por favor elige otro.', 409);
+    const r = reservar(lead, fecha, Number(horaTxt));
+    if (r.error === 'invalido') return mostrarCalendario(res, lead, 'Selecciona un horario válido.', 422);
+    if (r.error) return mostrarCalendario(res, lead, 'Ese horario se acaba de ocupar. Por favor elige otro.', 409);
+    if (r.sinCambio) return res.redirect(303, `/agendar/${lead.token}/listo`);
 
     lead = db.actualizarLead(lead.id, { estado: 'agendado' });
-    await notif.visitaAgendada(lead, visita, Boolean(anterior)).catch((e) => console.error('[agenda] notificación:', e));
+    await notif.visitaAgendada(lead, r.visita, { anterior: r.anterior }).catch((e) => console.error('[agenda] notificación:', e));
     res.redirect(303, `/agendar/${lead.token}/listo`);
   });
 
@@ -706,9 +712,17 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     const hoy = hoyChile();
     const lunesActual = sumarDias(hoy, 1 - (new Date(`${hoy}T00:00:00Z`).getUTCDay() || 7));
     const lunes = sumarDias(lunesActual, desplazamiento * 7);
-    const viernes = sumarDias(lunes, 4);
+    const sabado = sumarDias(lunes, 5);
     res.send(
-      vistas.calendarioPanel({ lunes, hoy, desplazamiento, visitas: db.visitasEntre(lunes, viernes), proximas: db.listarVisitas(hoy), config })
+      vistas.calendarioPanel({
+        lunes,
+        hoy,
+        desplazamiento,
+        visitas: db.visitasEntre(lunes, sabado),
+        bloqueos: db.bloqueosEntre(lunes, sabado),
+        proximas: db.listarVisitas(hoy),
+        config,
+      })
     );
   });
 
@@ -726,6 +740,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         lead,
         documentos: db.documentosDeLead(lead.id),
         visita: db.ultimaVisita(lead.id),
+        disponibles: calendarioDisponible(),
         firma: notif.firmaRevision(lead.id),
         aviso: AVISOS[req.query.ok] || null,
         config,
@@ -784,6 +799,12 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     resultado: 'Resultado de la visita guardado.',
     cancelada: 'Visita cancelada. El horario quedó libre.',
     cancelada_aviso: 'Visita cancelada. Le enviamos al interesado el link para elegir otro horario.',
+    agendada: 'Visita agendada. Se avisó al equipo y se agregó a su calendario.',
+    agendada_aviso: 'Visita agendada. Se avisó al equipo y al interesado.',
+    reagendada: 'Visita reagendada. El evento del calendario del equipo se movió a la nueva hora.',
+    reagendada_aviso: 'Visita reagendada. Se avisó al equipo y al interesado con la nueva hora.',
+    bloque_ocupado: 'Ese horario ya está ocupado o bloqueado. Elige otro.',
+    bloque_invalido: 'Selecciona un horario válido.',
   };
   const RESULTADOS = { realizada: 'visitado', no_asistio: 'no_asistio', no_continua: 'no_continua' };
   const formAdmin = express.urlencoded({ extended: false });
@@ -810,6 +831,39 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     const avisar = Boolean(req.body?.avisar);
     if (avisar) await notif.visitaCancelada(lead, visita).catch((e) => console.error('[panel] aviso cancelación:', e));
     res.redirect(303, `/admin/lead/${lead.id}?ok=${avisar ? 'cancelada_aviso' : 'cancelada'}#visita`);
+  });
+
+
+  // El equipo agenda o reagenda la visita (por ejemplo, si Julio no puede a esa hora)
+  app.post('/admin/lead/:id/visita/agendar', formAdmin, async (req, res) => {
+    let lead = leadAdmin(req, res);
+    if (!lead) return;
+    const [fecha, horaTxt] = String(req.body?.bloque || '').split('|');
+    const r = reservar(lead, fecha, Number(horaTxt));
+    if (r.error) return res.redirect(303, `/admin/lead/${lead.id}?ok=${r.error === 'ocupado' ? 'bloque_ocupado' : 'bloque_invalido'}#visita`);
+    if (r.sinCambio) return res.redirect(303, `/admin/lead/${lead.id}#visita`);
+    lead = db.actualizarLead(lead.id, { estado: 'agendado' });
+    const avisar = Boolean(req.body?.avisar);
+    await notif
+      .visitaAgendada(lead, r.visita, { anterior: r.anterior, porEquipo: true, avisarInteresado: avisar })
+      .catch((e) => console.error('[panel] agendar visita:', e));
+    res.redirect(303, `/admin/lead/${lead.id}?ok=${r.anterior ? 'reagendada' : 'agendada'}${avisar ? '_aviso' : ''}#visita`);
+  });
+
+  // Bloquear horarios en que el equipo no puede (compromisos fuera del sistema)
+  const volverCalendario = (req) => `/admin/calendario?semana=${parseInt(req.body?.semana, 10) || 0}`;
+  app.post('/admin/bloqueos', formAdmin, (req, res) => {
+    const fecha = String(req.body?.fecha || '');
+    const hora = req.body?.hora === '' || req.body?.hora === undefined ? null : Number(req.body.hora);
+    const valido = /^\d{4}-\d{2}-\d{2}$/.test(fecha) && (hora === null || horasDe(cfgAgenda, fecha).includes(hora));
+    if (valido && !(hora !== null && db.bloqueado(fecha, hora))) {
+      db.bloquear(fecha, hora, String(req.body?.motivo || '').trim().slice(0, 120));
+    }
+    res.redirect(303, volverCalendario(req));
+  });
+  app.post('/admin/bloqueos/:bid/eliminar', formAdmin, (req, res) => {
+    db.desbloquear(Number(req.params.bid));
+    res.redirect(303, volverCalendario(req));
   });
 
   app.get('/admin/lead/:id/eliminar', (req, res) => {

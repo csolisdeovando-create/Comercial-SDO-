@@ -135,10 +135,11 @@ test('flujo completo de un lead', async (t) => {
   // 4) Calendario y reserva
   const cal = await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text();
   assert.match(cal, /value="2026-10-16\|9"/);
-  assert.doesNotMatch(cal, /value="2026-10-17\|/); // sábado
+  assert.match(cal, /value="2026-10-17\|9"/); // sábado disponible
+  assert.doesNotMatch(cal, /value="2026-10-18\|/); // domingo no
 
-  r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-17|9' }) });
-  assert.strictEqual(r.status, 422);
+  r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-18|9' }) });
+  assert.strictEqual(r.status, 422); // domingo
 
   r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|9' }), redirect: 'manual' });
   assert.strictEqual(r.status, 303);
@@ -611,4 +612,62 @@ test('inicio de sesión del panel con página propia (sirve en el ícono del iPh
   // Salir
   r = await fetch(`${ctx.url}/salir`, { headers: { cookie: galleta }, redirect: 'manual' });
   assert.match(r.headers.get('set-cookie'), /sdo_sesion=;/);
+});
+
+test('sábados para Xiomara, bloqueos del equipo y reagendar desde el panel', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const post = (ruta, datos) => fetch(ctx.url + ruta, { method: 'POST', headers: h, body: new URLSearchParams(datos), redirect: 'manual' });
+  const lead = ctx.db.crearLead({ telefono: '56987654321', nombre: 'Ana Rojas', email: 'ana@example.com', propiedad: 'Rosario Sur 91', estado: 'aprobado' });
+
+  // Julio no puede el viernes 16 a las 15 y el lunes 19 completo: el equipo los bloquea
+  assert.strictEqual((await post('/admin/bloqueos', { fecha: '2026-10-16', hora: '15', semana: '0' })).status, 303);
+  await post('/admin/bloqueos', { fecha: '2026-10-19', hora: '', semana: '1' });
+  let cal = await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text();
+  assert.doesNotMatch(cal, /value="2026-10-16\|15"/, 'bloqueado no se ofrece');
+  assert.match(cal, /value="2026-10-16\|17"/);
+  assert.doesNotMatch(cal, /value="2026-10-19\|/, 'día bloqueado');
+  let r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|15' }) });
+  assert.strictEqual(r.status, 409);
+  const panel = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(panel, /🔒 Bloqueado/);
+  assert.match(panel, /Xiomara/);
+
+  // El interesado agenda viernes 17:00 -> equipo de semana (Julio)
+  await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|17' }) });
+  let aviso = ctx.correos.find((c) => /Nueva visita/.test(c.subject));
+  assert.ok(aviso.to.includes('julio.mendoza@sdorent.cl'));
+  assert.ok(!aviso.to.includes('xiomara@tricapitals.com'));
+
+  // Julio no puede: el equipo la reagenda al sábado 17 a las 11 -> pasa a Xiomara y se quita del calendario de Julio
+  const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Reagendar: elegir nueva fecha y hora/);
+  assert.match(ficha, /value="2026-10-17\|11"/);
+  const antes = ctx.correos.length;
+  r = await post(`/admin/lead/${lead.id}/visita/agendar`, { bloque: '2026-10-17|11', avisar: '1' });
+  assert.strictEqual(r.status, 303);
+  assert.match(r.headers.get('location'), /ok=reagendada_aviso/);
+  const nuevos = ctx.correos.slice(antes);
+  const aEquipo = nuevos.find((c) => /REAGENDADA por el equipo/.test(c.subject));
+  assert.ok(aEquipo.to.includes('xiomara@tricapitals.com'));
+  assert.ok(!aEquipo.to.includes('julio.mendoza@sdorent.cl'));
+  assert.match(aEquipo.icalEvent.content, /DTSTART;TZID=America\/Santiago:20261017T110000/);
+  const aJulio = nuevos.find((c) => /Visita movida/.test(c.subject));
+  assert.deepStrictEqual(aJulio.to, ['julio.mendoza@sdorent.cl']);
+  assert.strictEqual(aJulio.icalEvent.method, 'CANCEL');
+  const aInteresado = nuevos.find((c) => c.to === 'ana@example.com');
+  assert.match(aInteresado.subject, /Reagendamos tu visita: Sábado 17 de octubre a las 11:00 hrs/);
+  assert.strictEqual(ctx.db.visitaVigente(lead.id).fecha, '2026-10-17');
+  assert.strictEqual(ctx.db.contarBloque('2026-10-16', 17), 0, 'el horario anterior quedó libre');
+
+  // No se puede reagendar a un horario bloqueado
+  r = await post(`/admin/lead/${lead.id}/visita/agendar`, { bloque: '2026-10-16|15' });
+  assert.match(r.headers.get('location'), /ok=bloque_ocupado/);
+
+  // Desbloquear vuelve a ofrecer el horario
+  const b = ctx.db.bloqueosEntre('2026-10-16', '2026-10-16')[0];
+  await post(`/admin/bloqueos/${b.id}/eliminar`, { semana: '0' });
+  cal = await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text();
+  assert.match(cal, /value="2026-10-16\|15"/);
 });

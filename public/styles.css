@@ -80,7 +80,7 @@ input:focus, textarea:focus { outline: 2px solid var(--azul-2); outline-offset: 
 /* Calendario */
 .nav-semanas { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 10px; }
 .titulo-semana { font-weight: 700; color: var(--azul); text-transform: capitalize; }
-.dias { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.dias { display: grid; grid-template-columns: repeat(var(--ndias, 5), minmax(0, 1fr)); gap: 8px; }
 .dia { display: flex; flex-direction: column; gap: 6px; }
 .dia-cab { text-align: center; background: var(--azul); color: #fff; border-radius: 8px; padding: 6px 2px; line-height: 1.2; }
 .dia-nombre { display: block; text-transform: capitalize; font-weight: 700; font-size: 14px; }
@@ -234,3 +234,29 @@ fieldset.docs[data-grupo=comp] legend { color: var(--verde-texto); }
 /* Inicio de sesión */
 .login { max-width: 420px; margin: 24px auto; }
 .menu a.salir { color: var(--suave); font-weight: 500; }
+
+/* Agendar / reagendar por el equipo y bloqueos */
+.cambiar-visita { border-top: 1px solid var(--borde); margin-top: 16px; padding-top: 14px; }
+.form-agendar { display: grid; gap: 8px; margin-top: 10px; }
+.form-agendar label { margin: 0; }
+.fila-agendar { display: flex; gap: 8px; flex-wrap: wrap; }
+.fila-agendar select { flex: 1 1 240px; padding: 10px; border: 1px solid var(--borde); border-radius: 8px; font: inherit; background: #fff; }
+.form-bloqueo { margin: 0; }
+.boton-bloquear { border: 1px dashed var(--borde); background: transparent; color: var(--suave); border-radius: 6px; font: inherit; font-size: 12px; padding: 2px 6px; cursor: pointer; }
+.boton-bloquear:hover { border-color: var(--azul); color: var(--azul); }
+.cal-panel thead .boton-bloquear { color: #fff; border-color: rgba(255,255,255,.5); margin-top: 4px; }
+.cal-panel td .form-bloqueo { opacity: 0; transition: opacity .15s; }
+.cal-panel td:hover .form-bloqueo, .cal-panel td:focus-within .form-bloqueo { opacity: 1; }
+@media (hover: none) { .cal-panel td .form-bloqueo { opacity: .7; } }
+.cal-panel td.bloqueado { background: repeating-linear-gradient(45deg, #f1f3f5, #f1f3f5 6px, #e6e9ec 6px, #e6e9ec 12px); }
+.cal-panel th.bloqueado { background: #6b7480; }
+.cal-panel td.na { background: transparent; }
+.bloqueo { font-size: 12px; color: var(--suave); font-weight: 600; display: grid; gap: 4px; }
+.bloqueo .form-bloqueo { opacity: 1; }
+.responsable { opacity: .75; font-size: 11px; }
+
+.dia-nombre .corto { display: none; }
+@media (max-width: 560px) {
+  .dias[style*="--ndias:6"] .dia-nombre .largo { display: none; }
+  .dias[style*="--ndias:6"] .dia-nombre .corto { display: inline; }
+}

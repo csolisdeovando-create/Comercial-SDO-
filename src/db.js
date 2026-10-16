@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS visitas (
 );
 CREATE INDEX IF NOT EXISTS idx_visitas_bloque ON visitas(fecha, hora, estado);
 
+CREATE TABLE IF NOT EXISTS bloqueos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  fecha TEXT NOT NULL,
+  hora INTEGER,            -- NULL = día completo
+  motivo TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_bloqueos_fecha ON bloqueos(fecha);
+
 CREATE TABLE IF NOT EXISTS mensajes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   lead_id INTEGER REFERENCES leads(id),
@@ -152,7 +161,8 @@ function crearRepositorio(db) {
       db.prepare('SELECT * FROM documentos WHERE lead_id = ? ORDER BY id').all(leadId),
     documentoPorId: (id) => db.prepare('SELECT * FROM documentos WHERE id = ?').get(id),
 
-    ocupacionBloques(desde, hasta) {
+    // Visitas confirmadas + horarios bloqueados por el equipo (un bloqueo ocupa el bloque completo)
+    ocupacionBloques(desde, hasta, horasDe = () => []) {
       const filas = db
         .prepare(
           `SELECT fecha, hora, COUNT(*) AS n FROM visitas
@@ -161,16 +171,27 @@ function crearRepositorio(db) {
         .all(desde, hasta);
       const mapa = new Map();
       for (const f of filas) mapa.set(`${f.fecha} ${f.hora}`, f.n);
+      for (const b of repo.bloqueosEntre(desde, hasta)) {
+        const horas = b.hora === null ? horasDe(b.fecha) : [b.hora];
+        for (const h of horas) mapa.set(`${b.fecha} ${h}`, 9999);
+      }
       return mapa;
     },
+    bloqueosEntre: (desde, hasta) =>
+      db.prepare('SELECT * FROM bloqueos WHERE fecha BETWEEN ? AND ? ORDER BY fecha, hora').all(desde, hasta),
+    bloqueado: (fecha, hora) =>
+      Boolean(db.prepare('SELECT 1 FROM bloqueos WHERE fecha = ? AND (hora IS NULL OR hora = ?) LIMIT 1').get(fecha, hora)),
+    bloquear: (fecha, hora, motivo) =>
+      Number(db.prepare('INSERT INTO bloqueos (fecha, hora, motivo) VALUES (?,?,?)').run(fecha, hora ?? null, motivo || null).lastInsertRowid),
+    desbloquear: (id) => db.prepare('DELETE FROM bloqueos WHERE id = ?').run(id),
     visitaVigente: (leadId) =>
       db
         .prepare(`SELECT * FROM visitas WHERE lead_id = ? AND estado = 'confirmada' ORDER BY id DESC LIMIT 1`)
         .get(leadId),
     contarBloque: (fecha, hora) =>
-      db
-        .prepare(`SELECT COUNT(*) AS n FROM visitas WHERE estado = 'confirmada' AND fecha = ? AND hora = ?`)
-        .get(fecha, hora).n,
+      repo.bloqueado(fecha, hora)
+        ? 9999
+        : db.prepare(`SELECT COUNT(*) AS n FROM visitas WHERE estado = 'confirmada' AND fecha = ? AND hora = ?`).get(fecha, hora).n,
     cancelarVisitasDeLead: (leadId) =>
       db.prepare(`UPDATE visitas SET estado = 'reagendada' WHERE lead_id = ? AND estado = 'confirmada'`).run(leadId),
     crearVisita(leadId, fecha, hora) {
