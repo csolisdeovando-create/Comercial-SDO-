@@ -22,11 +22,18 @@ const REQUISITOS = {
 
 const TIPOS = Object.keys(REQUISITOS);
 
+// Los documentos de quien complementa renta usan el mismo campo con este prefijo
+const PREFIJO_COMP = 'comp_';
+
 function todosLosCampos() {
-  return TIPOS.flatMap((t) => REQUISITOS[t].documentos.map((d) => d.campo));
+  const base = TIPOS.flatMap((t) => REQUISITOS[t].documentos.map((d) => d.campo));
+  return [...base, ...base.map((c) => PREFIJO_COMP + c)];
 }
 
+const esComplemento = (campo) => String(campo).startsWith(PREFIJO_COMP);
+
 function nombreRequisito(campo) {
+  if (esComplemento(campo)) return `Complemento · ${nombreRequisito(campo.slice(PREFIJO_COMP.length))}`;
   for (const t of TIPOS) {
     const doc = REQUISITOS[t].documentos.find((d) => d.campo === campo);
     if (doc) return doc.nombre;
@@ -44,4 +51,4 @@ function textoRequisitosWhatsapp() {
   )}`;
 }
 
-module.exports = { REQUISITOS, TIPOS, todosLosCampos, nombreRequisito, textoRequisitosWhatsapp };
+module.exports = { REQUISITOS, TIPOS, PREFIJO_COMP, esComplemento, todosLosCampos, nombreRequisito, textoRequisitosWhatsapp };

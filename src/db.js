@@ -76,7 +76,12 @@ function migrar(db) {
   if (!visitas.includes('notas')) db.exec('ALTER TABLE visitas ADD COLUMN notas TEXT');
   if (!visitas.includes('resultado_at')) db.exec('ALTER TABLE visitas ADD COLUMN resultado_at TEXT');
   if (!visitas.includes('recordatorio_at')) db.exec('ALTER TABLE visitas ADD COLUMN recordatorio_at TEXT');
-  if (!columnas('leads').includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
+  const leads = columnas('leads');
+  if (!leads.includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
+  // Persona que complementa renta
+  for (const col of ['complementa INTEGER DEFAULT 0', 'comp_tipo TEXT', 'comp_nombre TEXT', 'comp_rut TEXT', 'comp_email TEXT', 'comp_telefono TEXT', 'comp_relacion TEXT']) {
+    if (!leads.includes(col.split(' ')[0])) db.exec(`ALTER TABLE leads ADD COLUMN ${col}`);
+  }
 }
 
 function crearRepositorio(db) {

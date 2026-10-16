@@ -215,3 +215,15 @@ a.cifra:hover, a.cifra.activa { box-shadow: 0 0 0 2px var(--azul); }
 .oculto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .destacada { border: 2px solid var(--turquesa); }
 .aviso-dup { font-size: 12px; color: #8a6100; font-weight: 600; }
+
+/* Complemento de renta */
+.complemento { border: 1px solid var(--borde); border-radius: 10px; padding: 14px; }
+.complemento legend { padding: 0 6px; }
+.interruptor { align-items: flex-start; cursor: pointer; }
+.interruptor span small { display: block; color: var(--suave); font-weight: 400; }
+.datos-comp { margin-top: 12px; }
+.subtitulo { font-weight: 600; margin: 0 0 8px; font-size: 14px; }
+.datos-comp .opciones-tipo { margin-bottom: 12px; }
+fieldset.docs[data-grupo=comp] legend { color: var(--verde-texto); }
+.sep-comp { font-size: 17px; margin: 18px 0 4px; padding-top: 14px; border-top: 2px solid var(--turquesa); color: var(--azul); }
+.tag-comp { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 99px; background: var(--verde-claro); color: var(--verde-texto); white-space: nowrap; }

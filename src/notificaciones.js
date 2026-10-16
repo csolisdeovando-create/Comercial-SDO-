@@ -32,7 +32,15 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       ${fila('Correo', lead.email)}${fila('Teléfono', lead.telefono && `+${lead.telefono}`)}
       ${fila('Propiedad', lead.propiedad)}
       ${lead.url_publicacion ? `<tr><td style="padding:6px 10px;color:#5a6478;width:140px">Publicación</td><td style="padding:6px 10px"><a href="${esc(lead.url_publicacion)}">Ver aviso</a></td></tr>` : ''}
-      ${fila('Origen', lead.portal)}${fila('Comentarios', lead.comentarios)}
+      ${fila('Origen', lead.portal)}
+      ${
+        lead.complementa
+          ? fila(
+              'Complementa renta',
+              `${lead.comp_nombre} · ${formatearRut(lead.comp_rut || '')} · ${REQUISITOS[lead.comp_tipo]?.etiqueta || ''}${lead.comp_relacion ? ` · ${lead.comp_relacion}` : ''}`
+            )
+          : ''
+      }${fila('Comentarios', lead.comentarios)}
     </table>`;
   };
 

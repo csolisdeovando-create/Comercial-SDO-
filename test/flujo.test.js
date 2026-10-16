@@ -465,3 +465,60 @@ test('recordatorio de visita el día anterior', async (t) => {
   // No se repite
   assert.strictEqual(await ctx.app.locals.enviarRecordatorios(), 0);
 });
+
+test('complemento de renta: datos y mismos documentos de quien complementa', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
+
+  const html = await (await fetch(`${ctx.url}/postular`)).text();
+  assert.match(html, /Voy a complementar renta con otra persona/);
+  assert.match(html, /name="comp_cedula"/);
+  assert.match(html, /name="comp_carpeta_tributaria"/);
+
+  const COMP = { complementa: '1', comp_tipo: 'independiente', comp_nombre: 'María Soto', comp_rut: '76.086.428-5', comp_relacion: 'Pareja' };
+  const DOCS_COMP = [['comp_carnet_representante', 'carnet_maria.pdf'], ['comp_carpeta_tributaria', 'carpeta.pdf'], ['comp_declaraciones_renta', 'f22.pdf'], ['comp_dicom_empresa', 'dicom_maria.pdf']];
+
+  // Falta un documento de quien complementa -> error
+  let r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, ...COMP }, [...DOCS_DEP, ...DOCS_COMP.slice(0, 3)]) });
+  assert.strictEqual(r.status, 422);
+  assert.match(await r.text(), /Falta adjuntar \(complemento\): Reporte Dicom/);
+
+  // Mismo RUT que quien postula -> error
+  r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, ...COMP, comp_rut: DATOS.rut }, [...DOCS_DEP, ...DOCS_COMP]) });
+  assert.match(await r.text(), /debe ser otra persona/);
+
+  r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, ...COMP }, [...DOCS_DEP, ...DOCS_COMP]) });
+  assert.strictEqual(r.status, 200);
+  const lead = ctx.db.leadPorTelefono('56987654321');
+  assert.strictEqual(lead.complementa, 1);
+  assert.strictEqual(lead.comp_tipo, 'independiente');
+  assert.strictEqual(lead.comp_rut, '760864285');
+  assert.strictEqual(ctx.db.documentosDeLead(lead.id).length, 10);
+
+  const correo = ctx.correos.find((c) => [].concat(c.to).includes('sdopropiedades@sdorent.cl'));
+  assert.match(correo.html, /Complementa renta/);
+  assert.match(correo.html, /María Soto/);
+  assert.match(correo.html, /Complemento · Carpeta tributaria/);
+  assert.strictEqual(correo.attachments.length, 10);
+
+  const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Complemento de renta · María Soto \(Independiente o empresa\)/);
+  assert.match(ficha, /carnet_maria\.pdf/);
+  const panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.match(panel, /\+ complemento/);
+
+  const zip = Buffer.from(await (await fetch(`${ctx.url}/admin/lead/${lead.id}/documentos.zip`, { headers: h })).arrayBuffer()).toString('latin1');
+  assert.ok(zip.includes('Complemento renta - Mar'), 'carpeta del complemento en el ZIP');
+  assert.ok(zip.includes('f22.pdf'));
+
+  // Si no marca la casilla, no se guarda complemento aunque lleguen archivos
+  const otro = await fetch(`${ctx.url}/postular`, {
+    method: 'POST',
+    body: formulario({ ...DATOS, telefono: '+56 9 3333 4444', email: 'x@example.com', rut: '76.086.428-5' }, [...DOCS_DEP, ...DOCS_COMP]),
+  });
+  assert.strictEqual(otro.status, 200);
+  const sinComp = ctx.db.leadPorTelefono('56933334444');
+  assert.strictEqual(sinComp.complementa, 0);
+  assert.strictEqual(ctx.db.documentosDeLead(sinComp.id).length, 6);
+});

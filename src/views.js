@@ -59,14 +59,20 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
   const v = { ...lead, ...valores };
   if (!v.tipo) v.tipo = 'dependiente';
   const val = (k) => esc(v[k] ?? '');
-  const seccionDocs = (tipo) => `
-    <fieldset class="docs" data-tipo="${tipo}" ${v.tipo === tipo ? '' : 'hidden'}>
-      <legend>Documentos · ${esc(REQUISITOS[tipo].etiqueta)}</legend>
+  const v_comp_tipo = v.comp_tipo || 'dependiente';
+  const compActivo = Boolean(Number(v.complementa) || v.complementa === '1');
+  // grupo: 'titular' (quien postula) o 'comp' (quien complementa renta)
+  const seccionDocs = (tipo, grupo = 'titular') => {
+    const prefijo = grupo === 'comp' ? 'comp_' : '';
+    const activo = grupo === 'comp' ? compActivo && v_comp_tipo === tipo : v.tipo === tipo;
+    const titulo = grupo === 'comp' ? `Documentos de quien complementa · ${REQUISITOS[tipo].etiqueta}` : `Documentos · ${REQUISITOS[tipo].etiqueta}`;
+    return `
+    <fieldset class="docs" data-tipo="${tipo}" data-grupo="${grupo}" ${activo ? '' : 'hidden'}>
+      <legend>${esc(titulo)}</legend>
       ${REQUISITOS[tipo].documentos
         .map((d, i) => {
-          const activo = v.tipo === tipo;
           const input = (multiple, requerido) =>
-            `<input type="file" name="${d.campo}" ${multiple ? 'multiple' : ''} accept="${ACEPTA}" ${requerido ? '' : 'data-opcional="1"'} ${activo && requerido ? 'required' : ''}>
+            `<input type="file" name="${prefijo}${d.campo}" ${multiple ? 'multiple' : ''} accept="${ACEPTA}" ${requerido ? '' : 'data-opcional="1"'} ${activo && requerido ? 'required' : ''}>
           <span class="seleccion" aria-live="polite">Seleccionar archivo</span>`;
           if (!d.casillas) {
             return `
@@ -92,6 +98,7 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
         })
         .join('')}
     </fieldset>`;
+  };
 
   return layout(
     'Postulación de arriendo',
@@ -131,6 +138,28 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
 
         ${seccionDocs('dependiente')}
         ${seccionDocs('independiente')}
+
+        <fieldset class="complemento">
+          <legend>Complemento de renta</legend>
+          <label class="check interruptor"><input type="checkbox" name="complementa" value="1" id="complementa" ${compActivo ? 'checked' : ''}>
+            <span><strong>Voy a complementar renta con otra persona</strong><small>Pareja, familiar u otra persona que sume sus ingresos. Debe presentar los mismos documentos.</small></span></label>
+          <div class="datos-comp" ${compActivo ? '' : 'hidden'}>
+            <p class="subtitulo">¿Cómo trabaja quien complementa?</p>
+            <div class="opciones-tipo">
+              <label class="opcion"><input type="radio" name="comp_tipo" value="dependiente" ${v_comp_tipo === 'dependiente' ? 'checked' : ''}><span>👔 Dependiente</span></label>
+              <label class="opcion"><input type="radio" name="comp_tipo" value="independiente" ${v_comp_tipo === 'independiente' ? 'checked' : ''}><span>🏢 Independiente o empresa</span></label>
+            </div>
+            <div class="grilla">
+              <label>Nombre completo<input name="comp_nombre" data-req-comp value="${val('comp_nombre')}"></label>
+              <label>RUT<input name="comp_rut" data-req-comp data-rut placeholder="12.345.678-9" value="${esc(v.comp_rut ? formatearRut(v.comp_rut) : '')}"></label>
+              <label>Correo electrónico <small class="nota">(opcional)</small><input type="email" name="comp_email" value="${val('comp_email')}"></label>
+              <label>Teléfono <small class="nota">(opcional)</small><input type="tel" name="comp_telefono" placeholder="+56 9 1234 5678" value="${esc(v.comp_telefono ? `+${v.comp_telefono}`.replace(/^\+\+/, '+') : '')}"></label>
+            </div>
+            <label>Relación con quien postula <small class="nota">(opcional)</small><input name="comp_relacion" placeholder="Ej: pareja, padre, hermana" value="${val('comp_relacion')}"></label>
+          </div>
+        </fieldset>
+        ${seccionDocs('dependiente', 'comp')}
+        ${seccionDocs('independiente', 'comp')}
 
         <p class="nota">Formatos: PDF, JPG, PNG o HEIC · Máximo ${config.archivos.maxMB} MB por archivo.</p>
 
@@ -255,6 +284,13 @@ function fichaLead(lead) {
     ${lead.url_publicacion ? `<tr><th>Publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : ''}
     ${fila('Origen', lead.portal)}
     ${fila('Comentarios', lead.comentarios)}
+    ${
+      lead.complementa
+        ? `<tr><th>Complementa renta</th><td>${esc(lead.comp_nombre)} · ${esc(formatearRut(lead.comp_rut || ''))} · ${esc(REQUISITOS[lead.comp_tipo]?.etiqueta || '')}${lead.comp_relacion ? ` · ${esc(lead.comp_relacion)}` : ''}${
+            lead.comp_email || lead.comp_telefono ? `<br><small>${esc([lead.comp_email, lead.comp_telefono && `+${lead.comp_telefono}`].filter(Boolean).join(' · '))}</small>` : ''
+          }</td></tr>`
+        : ''
+    }
   </table>`;
 }
 
@@ -352,7 +388,7 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
               .map(
                 (l) => `<tr>
           <td>${l.id}</td>
-          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a><br><small>${esc(l.email || '')}</small>
+          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="Complementa renta con ' + esc(l.comp_nombre || '') + '">+ complemento</span>' : ''}<br><small>${esc(l.email || '')}</small>
             ${l.duplicados ? `<br><span class="aviso-dup" title="Mismo teléfono o RUT que #${esc(l.duplicados)}">⚠️ Posible duplicado de ${l.duplicados.split(',').map((d) => `<a href="/admin/lead/${esc(d)}">#${esc(d)}</a>`).join(', ')}</span>` : ''}</td>
           <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>
@@ -372,9 +408,11 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
 
 function fichaAdmin({ lead, documentos, visita, firma, aviso, config }) {
   const requisitos = REQUISITOS[lead.tipo]?.documentos || [];
-  const grupos = requisitos.map((r) => ({ ...r, docs: documentos.filter((d) => d.requisito === r.campo) }));
-  const otros = documentos.filter((d) => !requisitos.some((r) => r.campo === d.requisito));
-  if (otros.length) grupos.push({ campo: 'otros', nombre: 'Otros documentos (postulación anterior)', docs: otros });
+  const grupos = requisitos.map((r, i) => ({ ...r, n: i + 1, docs: documentos.filter((d) => d.requisito === r.campo) }));
+  const reqComp = lead.complementa ? (REQUISITOS[lead.comp_tipo]?.documentos || []).map((r) => ({ ...r, campo: `comp_${r.campo}` })) : [];
+  const gruposComp = reqComp.map((r, i) => ({ ...r, n: i + 1, docs: documentos.filter((d) => d.requisito === r.campo) }));
+  const otros = documentos.filter((d) => ![...requisitos, ...reqComp].some((r) => r.campo === d.requisito));
+  if (otros.length) grupos.push({ campo: 'otros', n: '·', nombre: 'Otros documentos (postulación anterior)', docs: otros });
   const tipoArchivo = (d) => (/pdf/.test(d.mime || '') ? 'PDF' : 'IMG');
   const fecha = (iso) => (iso ? new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z')).toLocaleString('es-CL', { timeZone: config.zonaHoraria, dateStyle: 'medium', timeStyle: 'short' }) : '');
   const puedeRevisar = ['documentos_recibidos', 'rechazado'].includes(lead.estado) && documentos.length;
@@ -405,10 +443,17 @@ function fichaAdmin({ lead, documentos, visita, firma, aviso, config }) {
       </div>
       ${
         documentos.length
-          ? grupos
-              .map(
-                (g, i) => `<div class="grupo-docs">
-            <h3><span class="num">${g.campo === 'otros' ? '·' : i + 1}</span>${esc(g.nombre)}</h3>
+          ? [
+              ...grupos,
+              ...(gruposComp.length
+                ? [{ separador: `Complemento de renta · ${lead.comp_nombre || ''} (${REQUISITOS[lead.comp_tipo]?.etiqueta || ''})` }, ...gruposComp]
+                : []),
+            ]
+              .map((g) =>
+                g.separador
+                  ? `<h2 class="sep-comp">👥 ${esc(g.separador)}</h2>`
+                  : `<div class="grupo-docs">
+            <h3><span class="num">${g.n}</span>${esc(g.nombre)}</h3>
             ${
               g.docs.length
                 ? `<ul class="archivos">${g.docs

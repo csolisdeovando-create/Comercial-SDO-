@@ -2,18 +2,27 @@
   var form = document.getElementById('form-postulacion');
   if (!form) return;
 
-  // Mostrar documentos según tipo de postulante
+  // Mostrar documentos según tipo de postulante y, si corresponde, de quien complementa renta
+  var chkComp = form.querySelector('#complementa');
+  function marcado(nombre) {
+    var r = form.querySelector('input[name=' + nombre + ']:checked');
+    return r ? r.value : 'dependiente';
+  }
   function actualizarTipo() {
-    var marcado = form.querySelector('input[name=tipo]:checked');
-    var tipo = marcado ? marcado.value : 'dependiente';
+    var tipo = marcado('tipo');
+    var comp = chkComp && chkComp.checked;
+    var tipoComp = marcado('comp_tipo');
     form.querySelectorAll('fieldset.docs').forEach(function (fs) {
-      var activo = fs.dataset.tipo === tipo;
+      var activo = fs.dataset.grupo === 'comp' ? comp && fs.dataset.tipo === tipoComp : fs.dataset.tipo === tipo;
       fs.hidden = !activo;
       fs.querySelectorAll('input[type=file]').forEach(function (i) { i.required = activo && !i.dataset.opcional; });
     });
     form.querySelectorAll('.solo-empresa').forEach(function (el) { el.hidden = tipo !== 'independiente'; });
+    form.querySelectorAll('.datos-comp').forEach(function (el) { el.hidden = !comp; });
+    form.querySelectorAll('[data-req-comp]').forEach(function (i) { i.required = comp; });
   }
-  form.querySelectorAll('input[name=tipo]').forEach(function (r) { r.addEventListener('change', actualizarTipo); });
+  form.querySelectorAll('input[name=tipo], input[name=comp_tipo]').forEach(function (r) { r.addEventListener('change', actualizarTipo); });
+  if (chkComp) chkComp.addEventListener('change', actualizarTipo);
   actualizarTipo();
 
   // Mostrar nombres de archivos seleccionados

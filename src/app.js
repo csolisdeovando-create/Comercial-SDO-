@@ -5,7 +5,7 @@ const express = require('express');
 const multer = require('multer');
 const archiver = require('archiver');
 
-const { REQUISITOS, TIPOS, todosLosCampos, nombreRequisito } = require('./requisitos');
+const { REQUISITOS, TIPOS, PREFIJO_COMP, esComplemento, todosLosCampos, nombreRequisito } = require('./requisitos');
 const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias } = require('./agenda');
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
@@ -255,6 +255,21 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
           if (!req.files?.[d.campo]?.length) errores.push(`Falta adjuntar: ${d.nombre}.`);
         }
       }
+      // Complemento de renta: mismos datos básicos y mismos documentos según su tipo
+      const complementa = b.complementa === '1';
+      const compTipo = complementa ? (TIPOS.includes(b.comp_tipo) ? b.comp_tipo : null) : null;
+      if (complementa) {
+        if (!compTipo) errores.push('Indica si quien complementa renta es dependiente o independiente.');
+        if (!String(b.comp_nombre || '').trim()) errores.push('Ingresa el nombre de quien complementa renta.');
+        if (!rutValido(b.comp_rut)) errores.push('El RUT de quien complementa renta no es válido.');
+        else if (limpiarRut(b.comp_rut) === limpiarRut(b.rut)) errores.push('Quien complementa renta debe ser otra persona (el RUT es el mismo).');
+        if (b.comp_email && !emailValido(b.comp_email)) errores.push('El correo de quien complementa renta no es válido.');
+        if (compTipo && !err) {
+          for (const d of REQUISITOS[compTipo].documentos) {
+            if (!req.files?.[PREFIJO_COMP + d.campo]?.length) errores.push(`Falta adjuntar (complemento): ${d.nombre}.`);
+          }
+        }
+      }
 
       if (errores.length) {
         borrarTemporales(req);
@@ -303,6 +318,13 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         url_publicacion: pub?.url || lead.url_publicacion || null,
         portal: !lead.portal || lead.portal === 'Formulario web' ? pub?.portal || lead.portal : lead.portal,
         comentarios: String(b.comentarios || '').trim().slice(0, 2000) || null,
+        complementa: complementa ? 1 : 0,
+        comp_tipo: compTipo,
+        comp_nombre: complementa ? String(b.comp_nombre).trim().slice(0, 150) : null,
+        comp_rut: complementa ? limpiarRut(b.comp_rut) : null,
+        comp_email: complementa && b.comp_email ? String(b.comp_email).trim().toLowerCase() : null,
+        comp_telefono: complementa && b.comp_telefono ? normalizarTelefono(b.comp_telefono) : null,
+        comp_relacion: complementa ? String(b.comp_relacion || '').trim().slice(0, 80) || null : null,
         estado,
         motivo_rechazo: null,
         documentos_at: new Date().toISOString(),
@@ -313,13 +335,17 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       const carpeta = path.join(config.uploadsDir, String(lead.id));
       fs.mkdirSync(carpeta, { recursive: true });
       const documentos = [];
-      for (const d of REQUISITOS[tipo].documentos) {
-        for (const f of req.files[d.campo] || []) {
+      const campos = [
+        ...REQUISITOS[tipo].documentos.map((d) => d.campo),
+        ...(compTipo ? REQUISITOS[compTipo].documentos.map((d) => PREFIJO_COMP + d.campo) : []),
+      ];
+      for (const campo of campos) {
+        for (const f of req.files[campo] || []) {
           const destino = path.join(carpeta, path.basename(f.path));
           fs.renameSync(f.path, destino);
           const doc = {
             lead_id: lead.id,
-            requisito: d.campo,
+            requisito: campo,
             nombre_original: path.basename(f.originalname).replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0, 120) || 'archivo',
             ruta: destino,
             mime: f.mimetype,
@@ -542,7 +568,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
     };
     const filas = [
-      ['N°', 'Fecha postulación', 'Nombre', 'RUT', 'Tipo', 'Razón social', 'Correo', 'Teléfono', 'Propiedad', 'Link aviso', 'Origen', 'Estado', 'Visita', 'Resultado visita', 'Documentos'],
+      ['N°', 'Fecha postulación', 'Nombre', 'RUT', 'Tipo', 'Razón social', 'Correo', 'Teléfono', 'Propiedad', 'Link aviso', 'Origen', 'Estado', 'Visita', 'Resultado visita', 'Documentos', 'Complementa renta'],
       ...db.listarLeads(100000).map((l) => [
         l.id,
         (l.documentos_at || l.created_at || '').slice(0, 10),
@@ -559,6 +585,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         l.visita ? describirBloque(...l.visita.split(' ').map((x, i) => (i ? Number(x) : x))) : '',
         l.resultado_visita ? vistas.RESULTADO_VISITA[l.resultado_visita].replace(/^\S+\s/, '') : '',
         l.n_documentos,
+        l.complementa ? `${l.comp_nombre || ''} (${l.comp_rut ? formatearRut(l.comp_rut) : ''})` : '',
       ]),
     ];
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -628,9 +655,13 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     zip.pipe(res);
     const usados = new Map();
     const orden = REQUISITOS[lead.tipo]?.documentos.map((d) => d.campo) || [];
+    const ordenComp = REQUISITOS[lead.comp_tipo]?.documentos.map((d) => PREFIJO_COMP + d.campo) || [];
+    const limpiar = (t) => String(t).replace(/[\\/:*?"<>|]/g, '-');
     for (const d of docs) {
-      const n = orden.indexOf(d.requisito) + 1 || 9;
-      const carpeta = `${n} - ${nombreRequisito(d.requisito).replace(/[\\/:*?"<>|]/g, '-')}`;
+      const comp = esComplemento(d.requisito);
+      const n = (comp ? ordenComp : orden).indexOf(d.requisito) + 1 || 9;
+      const nombreReq = nombreRequisito(comp ? d.requisito.slice(PREFIJO_COMP.length) : d.requisito);
+      const carpeta = `${comp ? `Complemento renta - ${limpiar(lead.comp_nombre || 'complemento')}/` : ''}${n} - ${limpiar(nombreReq)}`;
       let nombre = `${carpeta}/${d.nombre_original}`;
       const repetido = usados.get(nombre) || 0;
       usados.set(nombre, repetido + 1);
