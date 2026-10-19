@@ -251,7 +251,8 @@ function revision({ lead, documentos, accion, firma, config }) {
   const aprobar = accion === 'aprobar';
   return layout(
     aprobar ? 'Aprobar postulación' : 'Rechazar postulación',
-    `<section class="tarjeta">
+    `<p class="migas"><a href="/admin">← Volver al panel</a> · <a href="/admin/lead/${lead.id}">Ver ficha</a></p>
+    <section class="tarjeta">
       <h1>${aprobar ? '✅ Aprobar postulación' : '❌ Rechazar / pedir documentos'}</h1>
       ${fichaLead(lead)}
       <h2>Documentos (${documentos.length})</h2>

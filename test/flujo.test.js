@@ -683,3 +683,38 @@ test('sábado solo hasta las 15:00', async (t) => {
   const r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-17|17' }) });
   assert.strictEqual(r.status, 422);
 });
+
+test('aprobar/rechazar: botón para volver al panel y no se notifica dos veces', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP) });
+  const lead = ctx.db.leadPorTelefono('56987654321');
+  const firma = ctx.correos[0].html.match(/aprobar\?firma=([^"]+)"/)[1];
+  const url = (a) => `${ctx.url}/revision/${lead.id}/${a}?firma=${firma}`;
+
+  // Rechazar dos veces con el mismo motivo (volver atrás y reenviar) -> un solo aviso
+  const motivo = { motivo: 'Falta la liquidación de agosto', reenviar: '1' };
+  let r = await fetch(url('rechazar'), { method: 'POST', body: new URLSearchParams(motivo), redirect: 'manual' });
+  assert.strictEqual(r.status, 303, 'redirige a la página de resultado');
+  let html = await (await fetch(ctx.url + r.headers.get('location'))).text();
+  assert.match(html, /Respuesta enviada/);
+  assert.match(html, /href="\/admin">Volver al panel/);
+  assert.match(html, new RegExp(`href="/admin/lead/${lead.id}"`));
+  const avisos = () => ctx.correos.filter((c) => c.to === 'juan@example.com' && /Sobre tu postulación/.test(c.subject)).length;
+  assert.strictEqual(avisos(), 1);
+  r = await fetch(url('rechazar'), { method: 'POST', body: new URLSearchParams(motivo), redirect: 'manual' });
+  assert.match(r.headers.get('location'), /r=ya_rechazada/);
+  assert.strictEqual(avisos(), 1, 'no se repite el aviso');
+
+  // Aprobar dos veces -> un solo calendario enviado; volver a abrir el link no muestra el botón
+  ctx.db.actualizarLead(lead.id, { estado: 'documentos_recibidos' });
+  await fetch(url('aprobar'), { method: 'POST' });
+  await fetch(url('aprobar'), { method: 'POST' });
+  const agendas = ctx.correos.filter((c) => c.to === 'juan@example.com' && /Agenda tu visita/.test(c.subject)).length;
+  assert.strictEqual(agendas, 1);
+  html = await (await fetch(url('aprobar'))).text();
+  assert.match(html, /Ya estaba aprobada/);
+  assert.doesNotMatch(html, /Aprobar y enviar calendario<\/button>/);
+  html = await (await fetch(url('rechazar'))).text();
+  assert.match(html, /No se puede rechazar/);
+});

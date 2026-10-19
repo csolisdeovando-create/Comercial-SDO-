@@ -409,11 +409,37 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     fs.createReadStream(doc.ruta).pipe(res);
   });
 
+  // Botones para volver después de revisar
+  const botonesRevision = (lead) =>
+    `<p class="acciones-centradas"><a class="boton primario" href="/admin">Volver al panel</a> <a class="boton" href="/admin/lead/${lead.id}">Ver ficha de ${esc((lead.nombre || 'interesado').split(' ')[0])}</a></p>`;
+
+  // Resultado de la revisión (se llega con una redirección: volver atrás o recargar no repite la acción)
+  const RESULTADOS_REVISION = {
+    aprobada: ['Postulación aprobada', '✅', (l) => `Se envió a ${esc(l.nombre)} el calendario para agendar su visita (${esc(l.email)}${l.telefono ? ` y WhatsApp +${esc(l.telefono)}` : ''}).`],
+    rechazada: ['Respuesta enviada', '📨', (l) => `Se informó a ${esc(l.nombre)} por correo${l.telefono ? ' y WhatsApp' : ''}.`],
+    ya_aprobada: ['Ya estaba aprobada', '👍', (l) => `La postulación de ${esc(l.nombre)} ya fue aprobada anteriormente. No se envió nada nuevo.`],
+    ya_rechazada: ['Respuesta ya enviada', '📨', (l) => `Ya se le había enviado esta respuesta a ${esc(l.nombre)}. No se envió nada nuevo.`],
+    no_rechazable: ['No se puede rechazar', 'ℹ️', (l) => `La postulación de ${esc(l.nombre)} ya está aprobada. Si no continúa, márcalo en su ficha.`],
+  };
+
+  app.get('/revision/:id/resultado', (req, res) => {
+    const lead = leadRevision(req, res);
+    if (!lead) return;
+    const [titulo, icono, texto] = RESULTADOS_REVISION[req.query.r] || RESULTADOS_REVISION.ya_aprobada;
+    res.send(vistas.mensaje(titulo, texto(lead), { ...opcVista, icono, extra: botonesRevision(lead) }));
+  });
+
+  const irResultado = (res, lead, firma, r) =>
+    res.redirect(303, `/revision/${lead.id}/resultado?firma=${encodeURIComponent(firma)}&r=${r}`);
+  const yaAprobado = (lead) => ['aprobado', 'agendado', 'no_asistio', 'visitado'].includes(lead.estado);
+
   // GET solo muestra la confirmación: así los antivirus de correo que "visitan" links no aprueban nada
   app.get('/revision/:id/:accion', (req, res) => {
     if (!['aprobar', 'rechazar'].includes(req.params.accion)) return res.sendStatus(404);
     const lead = leadRevision(req, res);
     if (!lead) return;
+    // Si ya se resolvió, se informa en vez de volver a mostrar el botón
+    if (yaAprobado(lead)) return irResultado(res, lead, req.query.firma, req.params.accion === 'aprobar' ? 'ya_aprobada' : 'no_rechazable');
     res.send(vistas.revision({ lead, documentos: db.documentosDeLead(lead.id), accion: req.params.accion, firma: req.query.firma, config }));
   });
 
@@ -422,24 +448,24 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     if (!['aprobar', 'rechazar'].includes(accion)) return res.sendStatus(404);
     let lead = leadRevision(req, res);
     if (!lead) return;
+    const firma = req.query.firma;
 
     if (accion === 'aprobar') {
-      if (['aprobado', 'agendado'].includes(lead.estado)) {
-        return res.send(vistas.mensaje('Ya estaba aprobada', `La postulación de ${esc(lead.nombre)} ya fue aprobada anteriormente.`, { ...opcVista, icono: '👍' }));
-      }
+      if (yaAprobado(lead)) return irResultado(res, lead, firma, 'ya_aprobada');
       lead = db.actualizarLead(lead.id, { estado: 'aprobado', aprobado_at: new Date().toISOString(), motivo_rechazo: null });
       await notif.enviarAgenda(lead).catch((e) => console.error('[revision] envío agenda:', e));
-      return res.send(
-        vistas.mensaje('Postulación aprobada', `Se envió a ${esc(lead.nombre)} el calendario para agendar su visita (${esc(lead.email)}${lead.telefono ? ` y WhatsApp +${esc(lead.telefono)}` : ''}).`, { ...opcVista, icono: '✅' })
-      );
+      return irResultado(res, lead, firma, 'aprobada');
     }
 
+    if (yaAprobado(lead)) return irResultado(res, lead, firma, 'no_rechazable');
     const motivo = String(req.body?.motivo || '').trim().slice(0, 2000);
-    if (!motivo) return res.redirect(303, `/revision/${lead.id}/rechazar?firma=${encodeURIComponent(req.query.firma)}`);
+    if (!motivo) return res.redirect(303, `/revision/${lead.id}/rechazar?firma=${encodeURIComponent(firma)}`);
+    // Mismo rechazo enviado de nuevo (doble clic, volver atrás): no se repite el aviso
+    if (['rechazado', 'cerrado'].includes(lead.estado) && lead.motivo_rechazo === motivo) return irResultado(res, lead, firma, 'ya_rechazada');
     const reenviar = Boolean(req.body?.reenviar);
     lead = db.actualizarLead(lead.id, { estado: reenviar ? 'rechazado' : 'cerrado', motivo_rechazo: motivo });
     await notif.rechazo(lead, motivo, reenviar).catch((e) => console.error('[revision] envío rechazo:', e));
-    res.send(vistas.mensaje('Respuesta enviada', `Se informó a ${esc(lead.nombre)} por correo y WhatsApp.`, { ...opcVista, icono: '📨' }));
+    irResultado(res, lead, firma, 'rechazada');
   });
 
   // ------------------------------------------------------------------
