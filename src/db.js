@@ -88,8 +88,14 @@ function migrar(db) {
   if (!visitas.includes('recordatorio_at')) db.exec('ALTER TABLE visitas ADD COLUMN recordatorio_at TEXT');
   const leads = columnas('leads');
   if (!leads.includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
-  // Persona que complementa renta
-  for (const col of ['complementa INTEGER DEFAULT 0', 'comp_tipo TEXT', 'comp_nombre TEXT', 'comp_rut TEXT', 'comp_email TEXT', 'comp_telefono TEXT', 'comp_relacion TEXT']) {
+  // Persona que complementa renta o es aval, y datos personales completos de ambos
+  const personales = ['doc_tipo', 'nacionalidad', 'fecha_nacimiento', 'estado_civil', 'profesion', 'direccion_actual', 'comuna'];
+  for (const col of [
+    'complementa INTEGER DEFAULT 0', 'comp_tipo TEXT', 'comp_nombre TEXT', 'comp_rut TEXT', 'comp_email TEXT', 'comp_telefono TEXT', 'comp_relacion TEXT',
+    'comp_rol TEXT',
+    ...personales.map((c) => `${c} TEXT`),
+    ...personales.map((c) => `comp_${c} TEXT`),
+  ]) {
     if (!leads.includes(col.split(' ')[0])) db.exec(`ALTER TABLE leads ADD COLUMN ${col}`);
   }
 }

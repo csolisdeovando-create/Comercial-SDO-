@@ -260,3 +260,11 @@ fieldset.docs[data-grupo=comp] legend { color: var(--verde-texto); }
   .dias[style*="--ndias:6"] .dia-nombre .largo { display: none; }
   .dias[style*="--ndias:6"] .dia-nombre .corto { display: inline; }
 }
+
+/* Documento: RUT o pasaporte */
+.campo-doc { margin-bottom: 12px; font-size: 14px; font-weight: 600; }
+.campo-doc > label { margin-bottom: 4px; }
+.fila-doc { display: flex; gap: 6px; }
+.fila-doc select { flex: 0 0 auto; padding: 10px 8px; border: 1px solid var(--borde); border-radius: 8px; font: inherit; font-weight: 400; background: #fff; margin-top: 0; }
+.fila-doc input { margin-top: 0 !important; flex: 1; min-width: 0; }
+label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px; font: inherit; font-weight: 400; border: 1px solid var(--borde); border-radius: 8px; background: #fff; }

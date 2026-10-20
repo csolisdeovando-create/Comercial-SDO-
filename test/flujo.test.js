@@ -65,7 +65,8 @@ function formulario(campos, archivos) {
   return fd;
 }
 
-const DATOS = { tipo: 'dependiente', nombre: 'Juan Pérez Soto', rut: '11.111.111-1', email: 'juan@example.com', telefono: '+56 9 8765 4321', consentimiento: '1' };
+const PERSONALES = { doc_tipo: 'rut', nacionalidad: 'Chilena', fecha_nacimiento: '1990-05-10', estado_civil: 'Soltero/a', profesion: 'Ingeniero comercial', direccion_actual: 'Av. Providencia 1234, depto 51', comuna: 'Providencia' };
+const DATOS = { tipo: 'dependiente', nombre: 'Juan Pérez Soto', rut: '11.111.111-1', email: 'juan@example.com', telefono: '+56 9 8765 4321', consentimiento: '1', ...PERSONALES };
 const DOCS_DEP = [['cedula', 'cédula.pdf'], ['liquidaciones', 'liq1.pdf'], ['liquidaciones', 'liq2.pdf'], ['liquidaciones', 'liq3.pdf'], ['afp', 'afp.pdf'], ['dicom', 'dicom.pdf']];
 
 test('flujo completo de un lead', async (t) => {
@@ -478,11 +479,15 @@ test('complemento de renta: datos y mismos documentos de quien complementa', asy
   const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
 
   const html = await (await fetch(`${ctx.url}/postular`)).text();
-  assert.match(html, /Voy a complementar renta con otra persona/);
+  assert.match(html, /Voy a complementar renta o tengo un aval/);
   assert.match(html, /name="comp_cedula"/);
   assert.match(html, /name="comp_carpeta_tributaria"/);
 
-  const COMP = { complementa: '1', comp_tipo: 'independiente', comp_nombre: 'María Soto', comp_rut: '76.086.428-5', comp_relacion: 'Pareja' };
+  const COMP = {
+    complementa: '1', comp_tipo: 'independiente', comp_nombre: 'María Soto', comp_rut: '76.086.428-5', comp_relacion: 'Pareja',
+    comp_doc_tipo: 'rut', comp_nacionalidad: 'Chilena', comp_fecha_nacimiento: '1988-02-20', comp_estado_civil: 'Casado/a',
+    comp_profesion: 'Arquitecta', comp_direccion_actual: 'Los Leones 100', comp_comuna: 'Providencia', comp_telefono: '+56 9 2222 3333', comp_email: 'maria@example.com',
+  };
   const DOCS_COMP = [['comp_carnet_representante', 'carnet_maria.pdf'], ['comp_carpeta_tributaria', 'carpeta.pdf'], ['comp_declaraciones_renta', 'f22.pdf'], ['comp_dicom_empresa', 'dicom_maria.pdf']];
 
   // Falta un documento de quien complementa -> error
@@ -509,7 +514,7 @@ test('complemento de renta: datos y mismos documentos de quien complementa', asy
   assert.strictEqual(correo.attachments.length, 10);
 
   const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
-  assert.match(ficha, /Complemento de renta · María Soto \(Independiente o empresa\)/);
+  assert.match(ficha, /Complementa renta · María Soto \(Independiente o empresa\)/);
   assert.match(ficha, /carnet_maria\.pdf/);
   const panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
   assert.match(panel, /\+ complemento/);
@@ -717,4 +722,88 @@ test('aprobar/rechazar: botón para volver al panel y no se notifica dos veces',
   assert.doesNotMatch(html, /Aprobar y enviar calendario<\/button>/);
   html = await (await fetch(url('rechazar'))).text();
   assert.match(html, /No se puede rechazar/);
+});
+
+test('datos personales completos: pasaporte, mayoría de edad, aval y ficha', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
+  const form = await (await fetch(`${ctx.url}/postular`)).text();
+  for (const campo of ['nacionalidad', 'fecha_nacimiento', 'estado_civil', 'profesion', 'direccion_actual', 'comuna', 'comp_nacionalidad', 'comp_profesion']) {
+    assert.match(form, new RegExp(`name="${campo}"`), campo);
+  }
+  assert.match(form, /Es aval/);
+
+  // Faltan datos -> errores claros
+  let r = await fetch(`${ctx.url}/postular`, {
+    method: 'POST',
+    body: formulario({ ...DATOS, nacionalidad: '', estado_civil: '', fecha_nacimiento: '2015-01-01' }, DOCS_DEP),
+  });
+  assert.strictEqual(r.status, 422);
+  const err = await r.text();
+  assert.match(err, /Indica la nacionalidad/);
+  assert.match(err, /Selecciona el estado civil/);
+  assert.match(err, /debe ser mayor de edad/);
+
+  // Extranjero con pasaporte + aval
+  const AVAL = {
+    complementa: '1', comp_rol: 'aval', comp_tipo: 'dependiente', comp_nombre: 'Rosa Díaz', comp_rut: '11.111.111-1', comp_doc_tipo: 'rut',
+    comp_nacionalidad: 'Chilena', comp_fecha_nacimiento: '1965-07-01', comp_estado_civil: 'Viudo/a', comp_profesion: 'Profesora',
+    comp_direccion_actual: 'Irarrázaval 2000', comp_comuna: 'Ñuñoa', comp_telefono: '+56 9 4444 5555', comp_email: 'rosa@example.com',
+  };
+  const DOCS_AVAL = [['comp_cedula', 'c.pdf'], ['comp_liquidaciones', 'l.pdf'], ['comp_afp', 'a.pdf'], ['comp_dicom', 'd.pdf']];
+  r = await fetch(`${ctx.url}/postular`, {
+    method: 'POST',
+    body: formulario({ ...DATOS, doc_tipo: 'pasaporte', rut: 'ab1234567', nacionalidad: 'Venezolana', estado_civil: 'Casado/a', ...AVAL }, [...DOCS_DEP, ...DOCS_AVAL]),
+  });
+  assert.strictEqual(r.status, 200);
+  const lead = ctx.db.leadPorTelefono('56987654321');
+  assert.strictEqual(lead.doc_tipo, 'pasaporte');
+  assert.strictEqual(lead.rut, 'AB1234567');
+  assert.strictEqual(lead.nacionalidad, 'Venezolana');
+  assert.strictEqual(lead.comuna, 'Providencia');
+  assert.strictEqual(lead.comp_rol, 'aval');
+  assert.strictEqual(lead.comp_comuna, 'Ñuñoa');
+
+  const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Pasaporte AB1234567/);
+  assert.match(ficha, /Venezolana/);
+  assert.match(ficha, /10-05-1990 \(\d+ años\)/);
+  assert.match(ficha, /Casado\/a/);
+  assert.match(ficha, /Ingeniero comercial/);
+  assert.match(ficha, /Av\. Providencia 1234, depto 51, Providencia/);
+  assert.match(ficha, /👥 Aval/);
+  assert.match(ficha, /RUT 11\.111\.111-1/);
+  assert.match(ficha, /Irarrázaval 2000, Ñuñoa/);
+  assert.match(ficha, /Profesora/);
+
+  const correo = ctx.correos.find((c) => [].concat(c.to).includes('sdopropiedades@sdorent.cl'));
+  assert.match(correo.html, /Fecha de nacimiento/);
+  assert.match(correo.html, /👥 Aval/);
+  assert.match(correo.html, /rosa@example\.com/);
+
+  const csv = Buffer.from(await (await fetch(`${ctx.url}/admin/exportar.csv`, { headers: h })).arrayBuffer()).toString('utf8');
+  assert.match(csv, /Nacionalidad;Fecha nacimiento;Estado civil;Profesión;Dirección actual;Comuna/);
+  assert.match(csv, /Venezolana;1990-05-10;Casado\/a;Ingeniero comercial/);
+});
+
+test('formulario completo como lo envía el navegador (todos los campos, con aval) se acepta', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const html = await (await fetch(`${ctx.url}/postular`)).text();
+  // Todos los campos de texto del formulario real, vacíos salvo los que llenamos
+  const nombres = [...new Set([...html.matchAll(/<(?:input|select|textarea)[^>]*name="([^"]+)"/g)].map((m) => m[1]))];
+  const textos = nombres.filter((n) => !/^(comp_)?(cedula|liquidaciones|afp|dicom|carnet_representante|carpeta_tributaria|declaraciones_renta|dicom_empresa)$/.test(n));
+  assert.ok(textos.length > 30, `el formulario tiene ${textos.length} campos de texto`);
+  const datos = Object.fromEntries(textos.map((n) => [n, '']));
+  Object.assign(datos, DATOS, {
+    complementa: '1', comp_rol: 'aval', comp_tipo: 'dependiente', comp_nombre: 'Rosa Díaz', comp_rut: '76.086.428-5', comp_doc_tipo: 'rut',
+    comp_nacionalidad: 'Chilena', comp_fecha_nacimiento: '1965-07-01', comp_estado_civil: 'Viudo/a', comp_profesion: 'Profesora',
+    comp_direccion_actual: 'Irarrázaval 2000', comp_comuna: 'Ñuñoa', comp_telefono: '+56 9 4444 5555', comp_email: 'rosa@example.com',
+  });
+  const DOCS_AVAL = [['comp_cedula', 'c.pdf'], ['comp_liquidaciones', 'l.pdf'], ['comp_afp', 'a.pdf'], ['comp_dicom', 'd.pdf']];
+  const r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(datos, [...DOCS_DEP, ...DOCS_AVAL]) });
+  const cuerpo = await r.text();
+  assert.strictEqual(r.status, 200, cuerpo.match(/<ul>.*?<\/ul>/s)?.[0]);
+  assert.match(cuerpo, /Postulación enviada/);
 });

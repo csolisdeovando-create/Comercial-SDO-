@@ -1,5 +1,6 @@
 const { esc, formatearRut, tamanoLegible } = require('./utils');
 const { REQUISITOS, nombreRequisito } = require('./requisitos');
+const { formularioPersona, filasPersona } = require('./personas');
 const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSemana, textoDias } = require('./agenda');
 
 function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true } = {}) {
@@ -71,7 +72,7 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
   const seccionDocs = (tipo, grupo = 'titular') => {
     const prefijo = grupo === 'comp' ? 'comp_' : '';
     const activo = grupo === 'comp' ? compActivo && v_comp_tipo === tipo : v.tipo === tipo;
-    const titulo = grupo === 'comp' ? `Documentos de quien complementa · ${REQUISITOS[tipo].etiqueta}` : `Documentos · ${REQUISITOS[tipo].etiqueta}`;
+    const titulo = grupo === 'comp' ? `Documentos de quien complementa o es aval · ${REQUISITOS[tipo].etiqueta}` : `Documentos · ${REQUISITOS[tipo].etiqueta}`;
     return `
     <fieldset class="docs" data-tipo="${tipo}" data-grupo="${grupo}" ${activo ? '' : 'hidden'}>
       <legend>${esc(titulo)}</legend>
@@ -123,12 +124,7 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
 
         <fieldset>
           <legend>Tus datos</legend>
-          <div class="grilla">
-            <label>Nombre completo<input name="nombre" required autocomplete="name" value="${val('nombre')}"></label>
-            <label>RUT<input name="rut" required placeholder="12.345.678-9" value="${esc(v.rut ? formatearRut(v.rut) : '')}" data-rut></label>
-            <label>Correo electrónico<input type="email" name="email" required autocomplete="email" value="${val('email')}"></label>
-            <label>Teléfono / WhatsApp<input type="tel" name="telefono" required autocomplete="tel" placeholder="+56 9 1234 5678" value="${esc(v.telefono ? `+${v.telefono}`.replace(/^\+\+/, '+') : '')}"></label>
-          </div>
+          ${formularioPersona(v, '')}
           <div class="grilla solo-empresa" ${v.tipo === 'independiente' ? '' : 'hidden'}>
             <label>Razón social (si postulas como empresa)<input name="razon_social" value="${val('razon_social')}"></label>
             <label>RUT empresa<input name="rut_empresa" placeholder="76.123.456-7" value="${esc(v.rut_empresa ? formatearRut(v.rut_empresa) : '')}" data-rut></label>
@@ -146,21 +142,22 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
         ${seccionDocs('independiente')}
 
         <fieldset class="complemento">
-          <legend>Complemento de renta</legend>
+          <legend>Complemento de renta o aval</legend>
           <label class="check interruptor"><input type="checkbox" name="complementa" value="1" id="complementa" ${compActivo ? 'checked' : ''}>
-            <span><strong>Voy a complementar renta con otra persona</strong><small>Pareja, familiar u otra persona que sume sus ingresos. Debe presentar los mismos documentos.</small></span></label>
+            <span><strong>Voy a complementar renta o tengo un aval</strong><small>Pareja, familiar u otra persona. Debe entregar los mismos datos y documentos.</small></span></label>
           <div class="datos-comp" ${compActivo ? '' : 'hidden'}>
-            <p class="subtitulo">¿Cómo trabaja quien complementa?</p>
+            <p class="subtitulo">Esta persona…</p>
+            <div class="opciones-tipo">
+              <label class="opcion"><input type="radio" name="comp_rol" value="complemento" ${v.comp_rol !== 'aval' ? 'checked' : ''}><span>➕ Complementa renta</span></label>
+              <label class="opcion"><input type="radio" name="comp_rol" value="aval" ${v.comp_rol === 'aval' ? 'checked' : ''}><span>🤝 Es aval</span></label>
+            </div>
+            <p class="subtitulo">¿Cómo trabaja?</p>
             <div class="opciones-tipo">
               <label class="opcion"><input type="radio" name="comp_tipo" value="dependiente" ${v_comp_tipo === 'dependiente' ? 'checked' : ''}><span>👔 Dependiente</span></label>
               <label class="opcion"><input type="radio" name="comp_tipo" value="independiente" ${v_comp_tipo === 'independiente' ? 'checked' : ''}><span>🏢 Independiente o empresa</span></label>
             </div>
-            <div class="grilla">
-              <label>Nombre completo<input name="comp_nombre" data-req-comp value="${val('comp_nombre')}"></label>
-              <label>RUT<input name="comp_rut" data-req-comp data-rut placeholder="12.345.678-9" value="${esc(v.comp_rut ? formatearRut(v.comp_rut) : '')}"></label>
-              <label>Correo electrónico <small class="nota">(opcional)</small><input type="email" name="comp_email" value="${val('comp_email')}"></label>
-              <label>Teléfono <small class="nota">(opcional)</small><input type="tel" name="comp_telefono" placeholder="+56 9 1234 5678" value="${esc(v.comp_telefono ? `+${v.comp_telefono}`.replace(/^\+\+/, '+') : '')}"></label>
-            </div>
+            <p class="subtitulo">Sus datos</p>
+            ${formularioPersona(v, 'comp_')}
             <label>Relación con quien postula <small class="nota">(opcional)</small><input name="comp_relacion" placeholder="Ej: pareja, padre, hermana" value="${val('comp_relacion')}"></label>
           </div>
         </fieldset>
@@ -278,28 +275,29 @@ function revision({ lead, documentos, accion, firma, config }) {
   );
 }
 
+const etiquetaComp = (lead) => (lead.comp_rol === 'aval' ? 'Aval' : 'Complementa renta');
+
 function fichaLead(lead) {
   const fila = (k, v) => (v ? `<tr><th>${k}</th><td>${esc(v)}</td></tr>` : '');
   return `<table class="ficha">
-    ${fila('Nombre', lead.nombre)}
-    ${fila('RUT', lead.rut && formatearRut(lead.rut))}
+    ${filasPersona(lead).map(([k, v]) => fila(k, v)).join('')}
     ${fila('Tipo', REQUISITOS[lead.tipo]?.etiqueta)}
     ${fila('Razón social', lead.razon_social)}
     ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
-    ${fila('Correo', lead.email)}
-    ${fila('Teléfono', lead.telefono && `+${lead.telefono}`)}
     ${fila('Propiedad', lead.propiedad)}
     ${lead.url_publicacion ? `<tr><th>Publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : ''}
     ${fila('Origen', lead.portal)}
     ${fila('Comentarios', lead.comentarios)}
-    ${
-      lead.complementa
-        ? `<tr><th>Complementa renta</th><td>${esc(lead.comp_nombre)} · ${esc(formatearRut(lead.comp_rut || ''))} · ${esc(REQUISITOS[lead.comp_tipo]?.etiqueta || '')}${lead.comp_relacion ? ` · ${esc(lead.comp_relacion)}` : ''}${
-            lead.comp_email || lead.comp_telefono ? `<br><small>${esc([lead.comp_email, lead.comp_telefono && `+${lead.comp_telefono}`].filter(Boolean).join(' · '))}</small>` : ''
-          }</td></tr>`
-        : ''
-    }
-  </table>`;
+  </table>
+  ${
+    lead.complementa
+      ? `<h2 class="sep-comp">👥 ${etiquetaComp(lead)}${lead.comp_relacion ? ` · ${esc(lead.comp_relacion)}` : ''}</h2>
+  <table class="ficha">
+    ${filasPersona(lead, 'comp_').map(([k, v]) => fila(k, v)).join('')}
+    ${fila('Tipo', REQUISITOS[lead.comp_tipo]?.etiqueta)}
+  </table>`
+      : ''
+  }`;
 }
 
 // ---------- Panel interno ----------
@@ -396,7 +394,7 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
               .map(
                 (l) => `<tr>
           <td>${l.id}</td>
-          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="Complementa renta con ' + esc(l.comp_nombre || '') + '">+ complemento</span>' : ''}<br><small>${esc(l.email || '')}</small>
+          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}<br><small>${esc(l.email || '')}</small>
             ${l.duplicados ? `<br><span class="aviso-dup" title="Mismo teléfono o RUT que #${esc(l.duplicados)}">⚠️ Posible duplicado de ${l.duplicados.split(',').map((d) => `<a href="/admin/lead/${esc(d)}">#${esc(d)}</a>`).join(', ')}</span>` : ''}</td>
           <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>
@@ -454,7 +452,7 @@ function fichaAdmin({ lead, documentos, visita, disponibles, firma, aviso, confi
           ? [
               ...grupos,
               ...(gruposComp.length
-                ? [{ separador: `Complemento de renta · ${lead.comp_nombre || ''} (${REQUISITOS[lead.comp_tipo]?.etiqueta || ''})` }, ...gruposComp]
+                ? [{ separador: `${etiquetaComp(lead)} · ${lead.comp_nombre || ''} (${REQUISITOS[lead.comp_tipo]?.etiqueta || ''})` }, ...gruposComp]
                 : []),
             ]
               .map((g) =>

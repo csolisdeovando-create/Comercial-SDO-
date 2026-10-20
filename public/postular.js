@@ -43,7 +43,14 @@
     return r.slice(0, -1).replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '-' + r.slice(-1);
   }
   form.querySelectorAll('[data-rut]').forEach(function (i) {
-    i.addEventListener('blur', function () { i.value = formatearRut(i.value); });
+    var selector = i.parentElement.querySelector('[data-doc-tipo]');
+    i.addEventListener('blur', function () {
+      if (!selector || selector.value === 'rut') i.value = formatearRut(i.value);
+    });
+    if (selector) selector.addEventListener('change', function () {
+      i.placeholder = selector.value === 'rut' ? '12.345.678-9' : 'N° de pasaporte';
+      if (selector.value === 'rut' && i.value) i.value = formatearRut(i.value);
+    });
   });
 
   // Al pegar el link del aviso, se identifica la propiedad automáticamente

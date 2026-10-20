@@ -10,6 +10,7 @@ const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDi
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
 const { interpretarUrl, leerPublicacion, resumenPropiedad } = require('./publicacion');
+const { validarPersona, CAMPOS_PERSONA, filasPersona } = require('./personas');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
 
@@ -176,7 +177,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
     }),
     defParamCharset: 'utf8',
-    limits: { fileSize: config.archivos.maxMB * 1024 * 1024, files: 40, fields: 30 },
+    limits: { fileSize: config.archivos.maxMB * 1024 * 1024, files: 60, fields: 150 },
     fileFilter: (_req, file, cb) => {
       if (!todosLosCampos().includes(file.fieldname)) return cb(null, false);
       if (!MIMES_PERMITIDOS.test(file.mimetype) && !EXT_PERMITIDAS.test(file.originalname)) {
@@ -248,12 +249,10 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       }
       const tipo = TIPOS.includes(b.tipo) ? b.tipo : null;
       if (!tipo) errores.push('Indica si eres trabajador dependiente o independiente/empresa.');
-      if (!String(b.nombre || '').trim()) errores.push('Ingresa tu nombre completo.');
-      if (!rutValido(b.rut)) errores.push('El RUT no es válido.');
+      const titular = validarPersona(b, '', '', ahora());
+      errores.push(...titular.errores);
       if (b.rut_empresa && !rutValido(b.rut_empresa)) errores.push('El RUT de la empresa no es válido.');
-      if (!emailValido(b.email)) errores.push('Ingresa un correo electrónico válido.');
-      const telefono = normalizarTelefono(b.telefono);
-      if (telefono.length < 11) errores.push('Ingresa un teléfono válido (ej: +56 9 1234 5678).');
+      const telefono = titular.telefono;
       if (!b.consentimiento) errores.push('Debes autorizar el uso de tus datos para evaluar la postulación.');
       if (tipo && !err) {
         for (const d of REQUISITOS[tipo].documentos) {
@@ -263,15 +262,19 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       // Complemento de renta: mismos datos básicos y mismos documentos según su tipo
       const complementa = b.complementa === '1';
       const compTipo = complementa ? (TIPOS.includes(b.comp_tipo) ? b.comp_tipo : null) : null;
+      const compRol = b.comp_rol === 'aval' ? 'aval' : 'complemento';
+      const quienComp = compRol === 'aval' ? 'quien es aval' : 'quien complementa renta';
+      let comp = null;
       if (complementa) {
-        if (!compTipo) errores.push('Indica si quien complementa renta es dependiente o independiente.');
-        if (!String(b.comp_nombre || '').trim()) errores.push('Ingresa el nombre de quien complementa renta.');
-        if (!rutValido(b.comp_rut)) errores.push('El RUT de quien complementa renta no es válido.');
-        else if (limpiarRut(b.comp_rut) === limpiarRut(b.rut)) errores.push('Quien complementa renta debe ser otra persona (el RUT es el mismo).');
-        if (b.comp_email && !emailValido(b.comp_email)) errores.push('El correo de quien complementa renta no es válido.');
+        if (!compTipo) errores.push(`Indica si ${quienComp} es dependiente o independiente.`);
+        comp = validarPersona(b, PREFIJO_COMP, quienComp, ahora());
+        errores.push(...comp.errores);
+        if (comp.datos.comp_rut && comp.datos.comp_rut === titular.datos.rut) {
+          errores.push(`${quienComp.charAt(0).toUpperCase()}${quienComp.slice(1)} debe ser otra persona (el documento es el mismo).`);
+        }
         if (compTipo && !err) {
           for (const d of REQUISITOS[compTipo].documentos) {
-            if (!req.files?.[PREFIJO_COMP + d.campo]?.length) errores.push(`Falta adjuntar (complemento): ${d.nombre}.`);
+            if (!req.files?.[PREFIJO_COMP + d.campo]?.length) errores.push(`Falta adjuntar (${compRol === 'aval' ? 'aval' : 'complemento'}): ${d.nombre}.`);
           }
         }
       }
@@ -284,8 +287,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       // Sin link personal: se busca si esta persona ya postuló (mismo teléfono o RUT)
       let actualizacion = false;
       if (!lead) {
-        const email = String(b.email).trim().toLowerCase();
-        const previo = db.leadPorTelefono(telefono) || db.leadPorRut(limpiarRut(b.rut));
+        const email = titular.datos.email;
+        const previo = db.leadPorTelefono(telefono) || db.leadPorRut(titular.datos.rut);
         const mismoCorreo = previo && (!previo.email || previo.email === email);
         if (previo && ['contactado', 'rechazado'].includes(previo.estado) && mismoCorreo) {
           lead = previo;
@@ -313,10 +316,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       const estado = config.agenda.automatica ? 'aprobado' : 'documentos_recibidos';
       lead = db.actualizarLead(lead.id, {
         tipo,
-        nombre: String(b.nombre).trim().slice(0, 150),
-        rut: limpiarRut(b.rut),
-        email: String(b.email).trim().toLowerCase(),
-        telefono,
+        ...titular.datos,
         razon_social: tipo === 'independiente' ? String(b.razon_social || '').trim().slice(0, 150) || null : null,
         rut_empresa: tipo === 'independiente' && b.rut_empresa ? limpiarRut(b.rut_empresa) : null,
         propiedad: String(b.propiedad || '').trim().slice(0, 300) || resumenPropiedad(pub) || lead.propiedad,
@@ -325,10 +325,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         comentarios: String(b.comentarios || '').trim().slice(0, 2000) || null,
         complementa: complementa ? 1 : 0,
         comp_tipo: compTipo,
-        comp_nombre: complementa ? String(b.comp_nombre).trim().slice(0, 150) : null,
-        comp_rut: complementa ? limpiarRut(b.comp_rut) : null,
-        comp_email: complementa && b.comp_email ? String(b.comp_email).trim().toLowerCase() : null,
-        comp_telefono: complementa && b.comp_telefono ? normalizarTelefono(b.comp_telefono) : null,
+        // Quien complementa renta o es aval (si no marcó la casilla, se limpian sus datos)
+        ...Object.fromEntries(CAMPOS_PERSONA.map((c) => [PREFIJO_COMP + c, comp ? comp.datos[PREFIJO_COMP + c] : null])),
+        comp_rol: complementa ? compRol : null,
         comp_relacion: complementa ? String(b.comp_relacion || '').trim().slice(0, 80) || null : null,
         estado,
         motivo_rechazo: null,
@@ -708,12 +707,12 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
     };
     const filas = [
-      ['N°', 'Fecha postulación', 'Nombre', 'RUT', 'Tipo', 'Razón social', 'Correo', 'Teléfono', 'Propiedad', 'Link aviso', 'Origen', 'Estado', 'Visita', 'Resultado visita', 'Documentos', 'Complementa renta'],
+      ['N°', 'Fecha postulación', 'Nombre', 'RUT', 'Tipo', 'Razón social', 'Correo', 'Teléfono', 'Propiedad', 'Link aviso', 'Origen', 'Estado', 'Visita', 'Resultado visita', 'Documentos', 'Complementa renta / aval', 'Documento', 'Nacionalidad', 'Fecha nacimiento', 'Estado civil', 'Profesión', 'Dirección actual', 'Comuna'],
       ...db.listarLeads(100000).map((l) => [
         l.id,
         (l.documentos_at || l.created_at || '').slice(0, 10),
         l.nombre,
-        l.rut ? formatearRut(l.rut) : '',
+        l.rut ? (l.doc_tipo === 'pasaporte' ? l.rut : formatearRut(l.rut)) : '',
         REQUISITOS[l.tipo]?.etiqueta || '',
         l.razon_social,
         l.email,
@@ -725,7 +724,14 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         l.visita ? describirBloque(...l.visita.split(' ').map((x, i) => (i ? Number(x) : x))) : '',
         l.resultado_visita ? vistas.RESULTADO_VISITA[l.resultado_visita].replace(/^\S+\s/, '') : '',
         l.n_documentos,
-        l.complementa ? `${l.comp_nombre || ''} (${l.comp_rut ? formatearRut(l.comp_rut) : ''})` : '',
+        l.complementa ? `${l.comp_rol === 'aval' ? 'Aval' : 'Complementa'}: ${l.comp_nombre || ''} (${l.comp_rut ? (l.comp_doc_tipo === 'pasaporte' ? l.comp_rut : formatearRut(l.comp_rut)) : ''})` : '',
+        l.rut ? (l.doc_tipo === 'pasaporte' ? `Pasaporte ${l.rut}` : formatearRut(l.rut)) : '',
+        l.nacionalidad,
+        l.fecha_nacimiento,
+        l.estado_civil,
+        l.profesion,
+        l.direccion_actual,
+        l.comuna,
       ]),
     ];
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

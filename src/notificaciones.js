@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const { esc, formatearRut, firmar, tamanoLegible } = require('./utils');
+const { filasPersona, documentoTexto } = require('./personas');
 const { REQUISITOS, nombreRequisito, textoRequisitosWhatsapp } = require('./requisitos');
 const { describirBloque, generarICS, horaTexto, diaSemana, textoDias } = require('./agenda');
 
@@ -29,24 +30,20 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
 
   const tablaLead = (lead) => {
     const fila = (k, v) =>
-      v ? `<tr><td style="padding:6px 10px;color:#5a6478;width:140px">${k}</td><td style="padding:6px 10px"><strong>${esc(v)}</strong></td></tr>` : '';
-    return `<table cellpadding="0" cellspacing="0" style="border:1px solid #e3e7ef;border-radius:8px;width:100%;margin:12px 0">
-      ${fila('Nombre', lead.nombre)}${fila('RUT', lead.rut && formatearRut(lead.rut))}
+      v ? `<tr><td style="padding:6px 10px;color:#5a6478;width:150px">${k}</td><td style="padding:6px 10px"><strong>${esc(v)}</strong></td></tr>` : '';
+    const tabla = (filas) => `<table cellpadding="0" cellspacing="0" style="border:1px solid #e3e7ef;border-radius:8px;width:100%;margin:12px 0">${filas}</table>`;
+    const titular = tabla(`
+      ${filasPersona(lead).map(([k, v]) => fila(k, v)).join('')}
       ${fila('Tipo', REQUISITOS[lead.tipo]?.etiqueta)}${fila('Razón social', lead.razon_social)}
       ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
-      ${fila('Correo', lead.email)}${fila('Teléfono', lead.telefono && `+${lead.telefono}`)}
       ${fila('Propiedad', lead.propiedad)}
-      ${lead.url_publicacion ? `<tr><td style="padding:6px 10px;color:#5a6478;width:140px">Publicación</td><td style="padding:6px 10px"><a href="${esc(lead.url_publicacion)}">Ver aviso</a></td></tr>` : ''}
-      ${fila('Origen', lead.portal)}
-      ${
-        lead.complementa
-          ? fila(
-              'Complementa renta',
-              `${lead.comp_nombre} · ${formatearRut(lead.comp_rut || '')} · ${REQUISITOS[lead.comp_tipo]?.etiqueta || ''}${lead.comp_relacion ? ` · ${lead.comp_relacion}` : ''}`
-            )
-          : ''
-      }${fila('Comentarios', lead.comentarios)}
-    </table>`;
+      ${lead.url_publicacion ? `<tr><td style="padding:6px 10px;color:#5a6478;width:150px">Publicación</td><td style="padding:6px 10px"><a href="${esc(lead.url_publicacion)}">Ver aviso</a></td></tr>` : ''}
+      ${fila('Origen', lead.portal)}${fila('Comentarios', lead.comentarios)}`);
+    const comp = lead.complementa
+      ? `<p style="margin:16px 0 0"><strong>👥 ${lead.comp_rol === 'aval' ? 'Aval' : 'Complementa renta'}${lead.comp_relacion ? ` (${esc(lead.comp_relacion)})` : ''}</strong></p>` +
+        tabla(`${filasPersona(lead, 'comp_').map(([k, v]) => fila(k, v)).join('')}${fila('Tipo', REQUISITOS[lead.comp_tipo]?.etiqueta)}`)
+      : '';
+    return titular + comp;
   };
 
   async function enviarWhatsappSeguro(lead, texto, parametrosPlantilla) {
@@ -273,13 +270,13 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         lead.url_publicacion ? `🔗 Aviso: ${lead.url_publicacion}` : null,
         lead.propiedad ? `📍 Mapa: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.propiedad)}` : null,
         '',
-        `👤 Interesado: ${lead.nombre || '-'}${lead.rut ? ` (RUT ${formatearRut(lead.rut)})` : ''}`,
+        `👤 Interesado: ${lead.nombre || '-'}${lead.rut ? ` (${documentoTexto(lead)})` : ''}`,
         `📞 Teléfono: ${tel}`,
         lead.telefono ? `💬 WhatsApp: https://wa.me/${lead.telefono}` : null,
         lead.email ? `✉️ Correo: ${lead.email}` : null,
         lead.tipo ? `💼 ${REQUISITOS[lead.tipo]?.etiqueta || lead.tipo}${lead.razon_social ? ` · ${lead.razon_social}` : ''}` : null,
         lead.complementa
-          ? `👥 Complementa renta: ${lead.comp_nombre || ''}${lead.comp_telefono ? ` +${lead.comp_telefono}` : ''}${lead.comp_relacion ? ` (${lead.comp_relacion})` : ''}`
+          ? `👥 ${lead.comp_rol === 'aval' ? 'Aval' : 'Complementa renta'}: ${lead.comp_nombre || ''}${lead.comp_telefono ? ` +${lead.comp_telefono}` : ''}${lead.comp_relacion ? ` (${lead.comp_relacion})` : ''}`
           : null,
         lead.portal ? `📣 Origen: ${lead.portal}` : null,
         '',
