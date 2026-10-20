@@ -66,7 +66,7 @@ function formulario(campos, archivos) {
 }
 
 const PERSONALES = { doc_tipo: 'rut', nacionalidad: 'Chilena', fecha_nacimiento: '1990-05-10', estado_civil: 'Soltero/a', profesion: 'Ingeniero comercial', direccion_actual: 'Av. Providencia 1234, depto 51', comuna: 'Providencia' };
-const DATOS = { tipo: 'dependiente', nombre: 'Juan Pérez Soto', rut: '11.111.111-1', email: 'juan@example.com', telefono: '+56 9 8765 4321', consentimiento: '1', ...PERSONALES };
+const DATOS = { tipo: 'dependiente', nombre: 'Juan Pérez Soto', rut: '11.111.111-1', email: 'juan@example.com', telefono: '+56 9 8765 4321', consentimiento: '1', plazo_cambio: '15_dias', ...PERSONALES };
 const DOCS_DEP = [['cedula', 'cédula.pdf'], ['liquidaciones', 'liq1.pdf'], ['liquidaciones', 'liq2.pdf'], ['liquidaciones', 'liq3.pdf'], ['afp', 'afp.pdf'], ['dicom', 'dicom.pdf']];
 
 test('flujo completo de un lead', async (t) => {
@@ -806,4 +806,30 @@ test('formulario completo como lo envía el navegador (todos los campos, con ava
   const cuerpo = await r.text();
   assert.strictEqual(r.status, 200, cuerpo.match(/<ul>.*?<\/ul>/s)?.[0]);
   assert.match(cuerpo, /Postulación enviada/);
+});
+
+test('fecha de cambio: se pide, se guarda y se ve en ficha, panel, correo y Excel', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
+  const form = await (await fetch(`${ctx.url}/postular`)).text();
+  assert.match(form, /¿Para cuándo te quieres cambiar\?/);
+  for (const v of ['5_dias', '15_dias', '1_mes', 'mas_1_mes']) assert.match(form, new RegExp(`name="plazo_cambio" value="${v}"`));
+
+  let r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, plazo_cambio: '' }, DOCS_DEP) });
+  assert.strictEqual(r.status, 422);
+  assert.match(await r.text(), /Indica para cuándo te quieres cambiar/);
+
+  r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, plazo_cambio: '5_dias' }, DOCS_DEP) });
+  assert.strictEqual(r.status, 200);
+  const lead = ctx.db.leadPorTelefono('56987654321');
+  assert.strictEqual(lead.plazo_cambio, '5_dias');
+
+  assert.match(await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text(), /Fecha de cambio<\/th><td>Dentro de los próximos 5 días/);
+  assert.match(await (await fetch(`${ctx.url}/admin`, { headers: h })).text(), /🚚 5 días/);
+  const correo = ctx.correos.find((c) => /Fecha de cambio/.test(c.html || ""));
+  assert.ok(correo, 'el correo de documentos muestra la fecha de cambio');
+  const csv = await (await fetch(`${ctx.url}/admin/exportar.csv`, { headers: h })).text();
+  assert.match(csv, /Fecha de cambio/);
+  assert.match(csv, /Dentro de los próximos 5 días/);
 });

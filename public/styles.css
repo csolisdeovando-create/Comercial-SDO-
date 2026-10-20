@@ -268,3 +268,11 @@ fieldset.docs[data-grupo=comp] legend { color: var(--verde-texto); }
 .fila-doc select { flex: 0 0 auto; padding: 10px 8px; border: 1px solid var(--borde); border-radius: 8px; font: inherit; font-weight: 400; background: #fff; margin-top: 0; }
 .fila-doc input { margin-top: 0 !important; flex: 1; min-width: 0; }
 label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px; font: inherit; font-weight: 400; border: 1px solid var(--borde); border-radius: 8px; background: #fff; }
+.campo-plazo { margin: 6px 0 4px; }
+.campo-plazo .etiqueta { display: block; font-weight: 600; margin-bottom: 6px; }
+.opciones-plazo { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.opciones-plazo .opcion span { padding: 10px 8px; font-size: 14px; height: 100%; }
+@media (max-width: 640px) { .opciones-plazo { grid-template-columns: 1fr 1fr; } }
+.tag-plazo { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 99px; background: #eef1f6; color: #3d4a63; white-space: nowrap; }
+.tag-plazo.plazo-5_dias { background: #fde8e6; color: #a3261b; }
+.tag-plazo.plazo-15_dias { background: #fff3d6; color: #8a5a00; }

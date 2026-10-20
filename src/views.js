@@ -1,6 +1,8 @@
 const { esc, formatearRut, tamanoLegible } = require('./utils');
 const { REQUISITOS, nombreRequisito } = require('./requisitos');
-const { formularioPersona, filasPersona } = require('./personas');
+const { formularioPersona, filasPersona, PLAZOS_CAMBIO } = require('./personas');
+
+const PLAZO_CORTO = { '5_dias': '5 días', '15_dias': '15 días', '1_mes': '1 mes', mas_1_mes: '+1 mes' };
 const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSemana, textoDias } = require('./agenda');
 
 function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true } = {}) {
@@ -136,6 +138,14 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
           <label for="propiedad">Dirección de la propiedad <small class="nota">(si no la sabes, basta con el link)</small>
             <input id="propiedad" name="propiedad" placeholder="Ej: Rosario Sur 91, depto 504, Las Condes" value="${val('propiedad')}">
           </label>
+          <div class="campo-plazo" role="radiogroup" aria-labelledby="plazo-titulo">
+            <span id="plazo-titulo" class="etiqueta">¿Para cuándo te quieres cambiar?</span>
+            <div class="opciones-plazo">
+              ${Object.entries(PLAZOS_CAMBIO)
+                .map(([k, t]) => `<label class="opcion"><input type="radio" name="plazo_cambio" value="${k}" required ${v.plazo_cambio === k ? 'checked' : ''}><span>${t}</span></label>`)
+                .join('')}
+            </div>
+          </div>
         </fieldset>
 
         ${seccionDocs('dependiente')}
@@ -285,6 +295,7 @@ function fichaLead(lead) {
     ${fila('Razón social', lead.razon_social)}
     ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
     ${fila('Propiedad', lead.propiedad)}
+    ${fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
     ${lead.url_publicacion ? `<tr><th>Publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : ''}
     ${fila('Origen', lead.portal)}
     ${fila('Comentarios', lead.comentarios)}
@@ -394,7 +405,7 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
               .map(
                 (l) => `<tr>
           <td>${l.id}</td>
-          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}<br><small>${esc(l.email || '')}</small>
+          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}${PLAZO_CORTO[l.plazo_cambio] ? ` <span class="tag-plazo plazo-${l.plazo_cambio}" title="${PLAZOS_CAMBIO[l.plazo_cambio]}">🚚 ${PLAZO_CORTO[l.plazo_cambio]}</span>` : ''}<br><small>${esc(l.email || '')}</small>
             ${l.duplicados ? `<br><span class="aviso-dup" title="Mismo teléfono o RUT que #${esc(l.duplicados)}">⚠️ Posible duplicado de ${l.duplicados.split(',').map((d) => `<a href="/admin/lead/${esc(d)}">#${esc(d)}</a>`).join(', ')}</span>` : ''}</td>
           <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>

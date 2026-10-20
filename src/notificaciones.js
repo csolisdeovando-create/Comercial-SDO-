@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const { esc, formatearRut, firmar, tamanoLegible } = require('./utils');
-const { filasPersona, documentoTexto } = require('./personas');
+const { filasPersona, documentoTexto, PLAZOS_CAMBIO } = require('./personas');
 const { REQUISITOS, nombreRequisito, textoRequisitosWhatsapp } = require('./requisitos');
 const { describirBloque, generarICS, horaTexto, diaSemana, textoDias } = require('./agenda');
 
@@ -36,7 +36,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       ${filasPersona(lead).map(([k, v]) => fila(k, v)).join('')}
       ${fila('Tipo', REQUISITOS[lead.tipo]?.etiqueta)}${fila('Razón social', lead.razon_social)}
       ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
-      ${fila('Propiedad', lead.propiedad)}
+      ${fila('Propiedad', lead.propiedad)}${fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
       ${lead.url_publicacion ? `<tr><td style="padding:6px 10px;color:#5a6478;width:150px">Publicación</td><td style="padding:6px 10px"><a href="${esc(lead.url_publicacion)}">Ver aviso</a></td></tr>` : ''}
       ${fila('Origen', lead.portal)}${fila('Comentarios', lead.comentarios)}`);
     const comp = lead.complementa
@@ -278,6 +278,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         lead.complementa
           ? `👥 ${lead.comp_rol === 'aval' ? 'Aval' : 'Complementa renta'}: ${lead.comp_nombre || ''}${lead.comp_telefono ? ` +${lead.comp_telefono}` : ''}${lead.comp_relacion ? ` (${lead.comp_relacion})` : ''}`
           : null,
+        lead.plazo_cambio ? `🚚 Fecha de cambio: ${PLAZOS_CAMBIO[lead.plazo_cambio]}` : null,
         lead.portal ? `📣 Origen: ${lead.portal}` : null,
         '',
         `📂 Ficha y documentos: ${config.baseUrl}/admin/lead/${lead.id}`,

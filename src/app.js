@@ -10,7 +10,7 @@ const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDi
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
 const { interpretarUrl, leerPublicacion, resumenPropiedad } = require('./publicacion');
-const { validarPersona, CAMPOS_PERSONA, filasPersona } = require('./personas');
+const { validarPersona, CAMPOS_PERSONA, filasPersona, PLAZOS_CAMBIO } = require('./personas');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
 
@@ -251,6 +251,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       if (!tipo) errores.push('Indica si eres trabajador dependiente o independiente/empresa.');
       const titular = validarPersona(b, '', '', ahora());
       errores.push(...titular.errores);
+      const plazoCambio = PLAZOS_CAMBIO[b.plazo_cambio] ? b.plazo_cambio : null;
+      if (!plazoCambio) errores.push('Indica para cuándo te quieres cambiar.');
       if (b.rut_empresa && !rutValido(b.rut_empresa)) errores.push('El RUT de la empresa no es válido.');
       const telefono = titular.telefono;
       if (!b.consentimiento) errores.push('Debes autorizar el uso de tus datos para evaluar la postulación.');
@@ -321,6 +323,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         rut_empresa: tipo === 'independiente' && b.rut_empresa ? limpiarRut(b.rut_empresa) : null,
         propiedad: String(b.propiedad || '').trim().slice(0, 300) || resumenPropiedad(pub) || lead.propiedad,
         url_publicacion: pub?.url || lead.url_publicacion || null,
+        plazo_cambio: plazoCambio,
         portal: !lead.portal || lead.portal === 'Formulario web' ? pub?.portal || lead.portal : lead.portal,
         comentarios: String(b.comentarios || '').trim().slice(0, 2000) || null,
         complementa: complementa ? 1 : 0,
@@ -707,7 +710,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
     };
     const filas = [
-      ['N°', 'Fecha postulación', 'Nombre', 'RUT', 'Tipo', 'Razón social', 'Correo', 'Teléfono', 'Propiedad', 'Link aviso', 'Origen', 'Estado', 'Visita', 'Resultado visita', 'Documentos', 'Complementa renta / aval', 'Documento', 'Nacionalidad', 'Fecha nacimiento', 'Estado civil', 'Profesión', 'Dirección actual', 'Comuna'],
+      ['N°', 'Fecha postulación', 'Nombre', 'RUT', 'Tipo', 'Razón social', 'Correo', 'Teléfono', 'Propiedad', 'Link aviso', 'Origen', 'Estado', 'Visita', 'Resultado visita', 'Documentos', 'Complementa renta / aval', 'Documento', 'Nacionalidad', 'Fecha nacimiento', 'Estado civil', 'Profesión', 'Dirección actual', 'Comuna', 'Fecha de cambio'],
       ...db.listarLeads(100000).map((l) => [
         l.id,
         (l.documentos_at || l.created_at || '').slice(0, 10),
@@ -732,6 +735,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         l.profesion,
         l.direccion_actual,
         l.comuna,
+        PLAZOS_CAMBIO[l.plazo_cambio] || '',
       ]),
     ];
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

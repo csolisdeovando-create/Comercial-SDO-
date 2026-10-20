@@ -2,6 +2,14 @@
 // Los de quien complementa usan los mismos nombres con el prefijo "comp_".
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido } = require('./utils');
 
+// Cuándo quiere cambiarse el interesado (orden = urgencia)
+const PLAZOS_CAMBIO = {
+  '5_dias': 'Dentro de los próximos 5 días',
+  '15_dias': 'Dentro de los próximos 15 días',
+  '1_mes': 'Dentro de 1 mes',
+  mas_1_mes: 'En más de 1 mes',
+};
+
 const ESTADOS_CIVILES = ['Soltero/a', 'Casado/a', 'Conviviente civil', 'Divorciado/a', 'Separado/a', 'Viudo/a'];
 
 // Columnas en la base de datos (sin prefijo)
@@ -140,4 +148,4 @@ function filasPersona(l, prefijo = '') {
   ].filter(([, v]) => v);
 }
 
-module.exports = { ESTADOS_CIVILES, CAMPOS_PERSONA, formularioPersona, validarPersona, filasPersona, documentoTexto, fechaLegible };
+module.exports = { PLAZOS_CAMBIO, ESTADOS_CIVILES, CAMPOS_PERSONA, formularioPersona, validarPersona, filasPersona, documentoTexto, fechaLegible };
