@@ -253,6 +253,10 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       errores.push(...titular.errores);
       const plazoCambio = PLAZOS_CAMBIO[b.plazo_cambio] ? b.plazo_cambio : null;
       if (!plazoCambio) errores.push('Indica para cuándo te quieres cambiar.');
+      if (!String(b.propiedad || '').trim()) errores.push('Ingresa la dirección de la propiedad que quieres arrendar.');
+      if (!interpretarUrl(String(b.url_publicacion || '').slice(0, 2000))) {
+        errores.push('Pega el link del aviso de la propiedad que te interesa (Mercado Libre, Yapo, Portal Inmobiliario…).');
+      }
       const soloLetras = (t) => sinTildes(t).replace(/[^a-z0-9]/g, '');
       const dirPropiedad = soloLetras(b.propiedad);
       const dirActual = soloLetras(b.direccion_actual);
@@ -484,7 +488,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   // Calendario con horarios ocupados (visitas + bloqueos del equipo)
   function calendarioDisponible() {
     const base = construirCalendario(cfgAgenda, new Map(), ahora());
-    const ocupacion = db.ocupacionBloques(base.desde, base.hasta, (f) => horasDe(cfgAgenda, f));
+    const ocupacion = db.ocupacionBloques(base.desde, base.hasta, (f) => horasDe(cfgAgenda, f), DURACION_HORAS);
     return construirCalendario(cfgAgenda, ocupacion, ahora());
   }
 
@@ -493,6 +497,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   }
 
   // Reserva un bloque para el interesado (usada por el interesado y por el equipo). Devuelve { visita, anterior } o un error.
+  // Horas que dura una visita: nunca se agenda otra que se cruce con ella
+  const DURACION_HORAS = Math.max(1, Math.ceil(config.agenda.duracionMinutos / 60));
+
   function reservar(lead, fecha, hora) {
     if (!horasDe(cfgAgenda, fecha).includes(hora) || !bloqueValido(cfgAgenda, fecha, hora, ahora())) return { error: 'invalido' };
     const anterior = db.visitaVigente(lead.id);
@@ -500,7 +507,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     let visita = null;
     try {
       visita = db.transaccion(() => {
-        if (db.contarBloque(fecha, hora) >= config.agenda.cuposPorBloque) return null;
+        if (db.contarBloque(fecha, hora, DURACION_HORAS, lead.id) >= config.agenda.cuposPorBloque) return null;
         db.cancelarVisitasDeLead(lead.id);
         return db.crearVisita(lead.id, fecha, hora);
       });
@@ -779,9 +786,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
   const ORIGENES_MANUALES = ['WhatsApp', 'Llamada telefónica', 'Mercado Libre', 'Yapo', 'Portal Inmobiliario', 'Referido', 'Otro'];
   const HORAS_MANUALES = Array.from({ length: 13 }, (_, i) => i + 8); // 08:00 a 20:00
 
-  const formNuevaVisita = (res, valores, { errores = [], conflicto = null, existente = null, status = 200 } = {}) =>
+  const formNuevaVisita = (res, valores, { errores = [], conflicto = null, cruces = [], existente = null, status = 200 } = {}) =>
     res.status(status).send(
-      vistas.nuevaVisita({ valores, errores, conflicto, existente, origenes: ORIGENES_MANUALES, horas: HORAS_MANUALES, hoy: hoyChile(), config })
+      vistas.nuevaVisita({ valores, errores, conflicto, cruces, existente, origenes: ORIGENES_MANUALES, horas: HORAS_MANUALES, hoy: hoyChile(), config })
     );
 
   app.get('/admin/visita/nueva', (req, res) => {
@@ -817,13 +824,13 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     if (anterior && !b.confirmo_existente && !(anterior.fecha === fecha && anterior.hora === hora)) {
       return formNuevaVisita(res, valores, { existente: { lead, visita: anterior }, status: 409 });
     }
-    const ocupado = db.contarBloque(fecha, hora) >= config.agenda.cuposPorBloque && !(anterior && anterior.fecha === fecha && anterior.hora === hora);
-    if (ocupado && !b.forzar) {
-      return formNuevaVisita(res, valores, {
-        conflicto: db.bloqueado(fecha, hora) ? 'bloqueado' : 'ocupado',
-        existente: anterior ? { lead, visita: anterior } : null,
-        status: 409,
-      });
+    // Nunca se cruza con otra visita ya agendada; un horario bloqueado sí se puede usar si se confirma
+    const seCruzaCon = db.cruces(fecha, hora, DURACION_HORAS, lead?.id);
+    if (seCruzaCon.length >= config.agenda.cuposPorBloque) {
+      return formNuevaVisita(res, valores, { conflicto: 'ocupado', cruces: seCruzaCon, existente: anterior ? { lead, visita: anterior } : null, status: 409 });
+    }
+    if (db.bloqueado(fecha, hora) && !b.forzar) {
+      return formNuevaVisita(res, valores, { conflicto: 'bloqueado', existente: anterior ? { lead, visita: anterior } : null, status: 409 });
     }
 
     const nota = txt('notas', 1000);
@@ -841,11 +848,14 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         });
       }
       if (anterior && anterior.fecha === fecha && anterior.hora === hora) return { visita: anterior, sinCambio: true };
+      if (db.cruces(fecha, hora, DURACION_HORAS, lead.id).length >= config.agenda.cuposPorBloque) return { ocupado: true };
       db.cancelarVisitasDeLead(lead.id);
       const visita = db.crearVisita(lead.id, fecha, hora, 'equipo');
       lead = db.actualizarLead(lead.id, { estado: 'agendado' });
       return { visita };
     });
+
+    if (r.ocupado) return formNuevaVisita(res, valores, { conflicto: 'ocupado', cruces: db.cruces(fecha, hora, DURACION_HORAS, lead.id), status: 409 });
 
     // Avisos: solo visitas de hoy en adelante (una pasada es solo registro)
     if (!r.sinCambio && fecha >= hoy) {

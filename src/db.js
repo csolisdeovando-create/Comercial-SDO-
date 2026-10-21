@@ -171,7 +171,8 @@ function crearRepositorio(db) {
     documentoPorId: (id) => db.prepare('SELECT * FROM documentos WHERE id = ?').get(id),
 
     // Visitas confirmadas + horarios bloqueados por el equipo (un bloqueo ocupa el bloque completo)
-    ocupacionBloques(desde, hasta, horasDe = () => []) {
+    // `duracionHoras`: una visita ocupa también los bloques que se le cruzan (si dura más de 1 hora)
+    ocupacionBloques(desde, hasta, horasDe = () => [], duracionHoras = 1) {
       const filas = db
         .prepare(
           `SELECT fecha, hora, COUNT(*) AS n FROM visitas
@@ -179,7 +180,12 @@ function crearRepositorio(db) {
         )
         .all(desde, hasta);
       const mapa = new Map();
-      for (const f of filas) mapa.set(`${f.fecha} ${f.hora}`, f.n);
+      for (const f of filas) {
+        for (let k = 1 - duracionHoras; k < duracionHoras; k++) {
+          const clave = `${f.fecha} ${f.hora + k}`;
+          mapa.set(clave, (mapa.get(clave) || 0) + f.n);
+        }
+      }
       for (const b of repo.bloqueosEntre(desde, hasta)) {
         const horas = b.hora === null ? horasDe(b.fecha) : [b.hora];
         for (const h of horas) mapa.set(`${b.fecha} ${h}`, 9999);
@@ -197,10 +203,16 @@ function crearRepositorio(db) {
       db
         .prepare(`SELECT * FROM visitas WHERE lead_id = ? AND estado = 'confirmada' ORDER BY id DESC LIMIT 1`)
         .get(leadId),
-    contarBloque: (fecha, hora) =>
-      repo.bloqueado(fecha, hora)
-        ? 9999
-        : db.prepare(`SELECT COUNT(*) AS n FROM visitas WHERE estado = 'confirmada' AND fecha = ? AND hora = ?`).get(fecha, hora).n,
+    // Visitas vigentes que se cruzan con una visita en `fecha` `hora` (sin contar las de `excluirLead`)
+    cruces: (fecha, hora, duracionHoras = 1, excluirLead = 0) =>
+      db
+        .prepare(
+          `SELECT v.*, l.nombre FROM visitas v JOIN leads l ON l.id = v.lead_id
+           WHERE v.estado = 'confirmada' AND v.fecha = ? AND v.hora > ? AND v.hora < ? AND v.lead_id != ? ORDER BY v.hora`
+        )
+        .all(fecha, hora - duracionHoras, hora + duracionHoras, excluirLead || 0),
+    contarBloque: (fecha, hora, duracionHoras = 1, excluirLead = 0) =>
+      repo.bloqueado(fecha, hora) ? 9999 : repo.cruces(fecha, hora, duracionHoras, excluirLead).length,
     cancelarVisitasDeLead: (leadId) =>
       db.prepare(`UPDATE visitas SET estado = 'reagendada' WHERE lead_id = ? AND estado = 'confirmada'`).run(leadId),
     crearVisita(leadId, fecha, hora, origen = null) {

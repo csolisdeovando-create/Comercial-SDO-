@@ -136,11 +136,11 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
         <fieldset>
           <legend>La propiedad que quieres arrendar</legend>
           <label for="url_publicacion">Link de la publicación que te interesa
-            <input id="url_publicacion" name="url_publicacion" type="text" inputmode="url" autocomplete="off" placeholder="Pega aquí el link del aviso (Mercado Libre, Yapo, Portal Inmobiliario…)" value="${val('url_publicacion')}" data-publicacion>
+            <input id="url_publicacion" name="url_publicacion" type="text" inputmode="url" autocomplete="off" required placeholder="Pega aquí el link del aviso (Mercado Libre, Yapo, Portal Inmobiliario…)" value="${val('url_publicacion')}" data-publicacion>
           </label>
           <div class="vista-publicacion" id="vista-publicacion" hidden aria-live="polite"></div>
-          <label for="propiedad">Dirección de la propiedad que quieres arrendar <small class="nota">(la del aviso, no tu dirección actual; si no la sabes, basta con el link)</small>
-            <input id="propiedad" name="propiedad" placeholder="Ej: Rosario Sur 91, depto 504, Las Condes" value="${val('propiedad')}">
+          <label for="propiedad">Dirección de la propiedad que quieres arrendar <small class="nota">(la del aviso, no tu dirección actual)</small>
+            <input id="propiedad" name="propiedad" required placeholder="Ej: Rosario Sur 91, depto 504, Las Condes" value="${val('propiedad')}">
           </label>
           <div class="campo-plazo" role="radiogroup" aria-labelledby="plazo-titulo">
             <span id="plazo-titulo" class="etiqueta">¿Para cuándo te quieres cambiar?</span>
@@ -649,7 +649,7 @@ function confirmarEliminar({ lead, documentos, visita, config }) {
   );
 }
 
-function nuevaVisita({ valores: v, errores, conflicto, existente, origenes, horas, hoy, config }) {
+function nuevaVisita({ valores: v, errores, conflicto, cruces = [], existente, origenes, horas, hoy, config }) {
   const val = (c) => esc(v[c] ?? '');
   const reintento = conflicto || existente;
   return layout(
@@ -665,9 +665,13 @@ function nuevaVisita({ valores: v, errores, conflicto, existente, origenes, hora
           : ''
       }
       ${
-        conflicto
-          ? `<div class="alerta aviso">⚠️ El ${esc(describirBloque(v.fecha, Number(v.hora)))} ${conflicto === 'bloqueado' ? 'está <strong>bloqueado</strong> por el equipo' : 'ya tiene <strong>otra visita</strong>'}. Elige otra hora o confirma abajo que quieres agendarla igual.</div>`
-          : ''
+        conflicto === 'ocupado'
+          ? `<div class="alerta error">⛔ El ${esc(describirBloque(v.fecha, Number(v.hora)))} se cruza con ${cruces
+              .map((c) => `la visita de <a href="/admin/lead/${c.lead_id}"><strong>${esc(c.nombre || 'otro interesado')}</strong></a> a las ${horaTexto(c.hora)}`)
+              .join(', ') || '<strong>otra visita</strong>'}. Elige otra hora.</div>`
+          : conflicto === 'bloqueado'
+            ? `<div class="alerta aviso">⚠️ El ${esc(describirBloque(v.fecha, Number(v.hora)))} está <strong>bloqueado</strong> por el equipo. Elige otra hora o confirma abajo que quieres agendarla igual.</div>`
+            : ''
       }
       <form method="post" action="/admin/visita/nueva" class="form-manual">
         <fieldset>
@@ -681,7 +685,7 @@ function nuevaVisita({ valores: v, errores, conflicto, existente, origenes, hora
               </select>
             </label>
           </div>
-          <p class="nota">Lunes a viernes atiende Julio; los sábados, Xiomara. Una fecha pasada queda solo como registro (no se envían avisos).</p>
+          <p class="nota">No se puede cruzar con otra visita ya agendada. Una fecha pasada queda solo como registro (no se envían avisos).</p>
         </fieldset>
         <fieldset>
           <legend>Interesado</legend>
@@ -698,7 +702,7 @@ function nuevaVisita({ valores: v, errores, conflicto, existente, origenes, hora
           <label class="check"><input type="checkbox" name="avisar" value="1" ${v.avisar ? 'checked' : ''}> Enviar confirmación al interesado (si tiene correo)</label>
         </fieldset>
         ${existente ? '<input type="hidden" name="confirmo_existente" value="1">' : ''}
-        ${conflicto ? '<label class="check fuerte"><input type="checkbox" name="forzar" value="1" required> Sí, agendar igual en ese horario</label>' : ''}
+        ${conflicto === 'bloqueado' ? '<label class="check fuerte"><input type="checkbox" name="forzar" value="1" required> Sí, agendar igual en ese horario</label>' : ''}
         <button class="boton primario grande">${reintento ? 'Confirmar y agendar' : 'Agendar visita'}</button>
       </form>
     </section>`,
@@ -722,7 +726,6 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   const botonDesbloquear = (b) =>
     `<form method="post" action="/admin/bloqueos/${b.id}/eliminar" class="form-bloqueo">${campoSemana}<button class="boton-bloquear" title="Volver a dejar disponible">Desbloquear</button></form>`;
   const botonAgregar = (f, h) => `<a class="boton-agregar" href="/admin/visita/nueva?fecha=${f}&amp;hora=${h}" title="Ingresar una visita a esta hora">＋<span class="txt"> Agendar</span></a>`;
-  const responsable = (f) => (new Date(`${f}T00:00:00Z`).getUTCDay() === 6 ? 'Xiomara' : 'Julio');
   const estadoVisita = (v) => (v.resultado ? 'realizada' : v.confirmada_at ? 'confirmada' : 'pendiente');
   const tarjetaVisita = (v) => `<a class="visita ${estadoVisita(v)}" href="/admin/lead/${v.lead_id}">
       <strong>${esc(v.nombre || 'Interesado')}</strong>
@@ -762,7 +765,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
             const d = encabezadoDia(f);
             const n = cuantas(f);
             return `<th class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${d.bloqueo ? 'bloqueado' : ''}"><span>${esc(d.nombre)}</span><small>${esc(d.fecha)}${d.feriado ? ' · feriado' : ''}</small>
-              <small class="responsable">${responsable(f)}${n ? ` · ${n} visita${n > 1 ? 's' : ''}` : ''}</small>
+              <small class="responsable">${n ? `${n} visita${n > 1 ? 's' : ''}` : 'Sin visitas'}</small>
               ${f >= hoy && !d.feriado ? (d.bloqueo ? botonDesbloquear(d.bloqueo) : botonBloquear(f, null, '🔒 Día')) : ''}</th>`;
           })
           .join('')}</tr></thead>
@@ -794,7 +797,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
         )
         .join('');
       return `<section class="dia-lista ${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''}" ${f === hoy ? 'id="hoy"' : ''}>
-        <header><div><strong>${esc(d.nombre)}</strong> ${esc(d.fecha)}${d.feriado ? ' · feriado' : ''}<small>${responsable(f)}${cuantas(f) ? ` · ${cuantas(f)} visita${cuantas(f) > 1 ? 's' : ''}` : ''}</small></div>
+        <header><div><strong>${esc(d.nombre)}</strong> ${esc(d.fecha)}${d.feriado ? ' · feriado' : ''}<small>${cuantas(f) ? `${cuantas(f)} visita${cuantas(f) > 1 ? 's' : ''}` : 'Sin visitas'}</small></div>
           ${f >= hoy && !d.feriado ? (d.bloqueo ? botonDesbloquear(d.bloqueo) : botonBloquear(f, null, '🔒 Día')) : ''}</header>
         ${d.bloqueo ? `<p class="bloqueo">🔒 Día bloqueado${d.bloqueo.motivo ? `: ${esc(d.bloqueo.motivo)}` : ''}</p>` : ''}
         ${filas ? `<ul>${filas}</ul>` : '<p class="sin-visitas">Sin visitas</p>'}

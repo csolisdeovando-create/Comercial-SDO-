@@ -66,7 +66,7 @@ function formulario(campos, archivos) {
 }
 
 const PERSONALES = { doc_tipo: 'rut', nacionalidad: 'Chilena', fecha_nacimiento: '1990-05-10', estado_civil: 'Soltero/a', profesion: 'Ingeniero comercial', direccion_actual: 'Av. Providencia 1234, depto 51', comuna: 'Providencia' };
-const DATOS = { tipo: 'dependiente', nombre: 'Juan Pérez Soto', rut: '11.111.111-1', email: 'juan@example.com', telefono: '+56 9 8765 4321', consentimiento: '1', plazo_cambio: '15_dias', ...PERSONALES };
+const DATOS = { tipo: 'dependiente', nombre: 'Juan Pérez Soto', rut: '11.111.111-1', email: 'juan@example.com', telefono: '+56 9 8765 4321', consentimiento: '1', plazo_cambio: '15_dias', propiedad: 'Rosario Sur 91, depto 504, Las Condes', url_publicacion: 'https://www.sdorent.cl/propiedad/91', ...PERSONALES };
 const DOCS_DEP = [['cedula', 'cédula.pdf'], ['liquidaciones', 'liq1.pdf'], ['liquidaciones', 'liq2.pdf'], ['liquidaciones', 'liq3.pdf'], ['afp', 'afp.pdf'], ['dicom', 'dicom.pdf']];
 
 test('flujo completo de un lead', async (t) => {
@@ -372,12 +372,20 @@ test('link de la publicación: identifica la propiedad y el portal', async (t) =
   assert.match(r.descripcion, /^Se arrienda depto providencia 2D 2B$/);
   assert.strictEqual((await fetch(`${ctx.url}/api/publicacion?url=hola`)).status, 422);
 
-  // Al postular solo con el link, la propiedad y el origen se completan solos
-  const res = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, url_publicacion: url }, DOCS_DEP) });
+  // La dirección y el link del aviso son obligatorios
+  let res = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, url_publicacion: '', propiedad: '' }, DOCS_DEP) });
+  assert.strictEqual(res.status, 422);
+  const errores = await res.text();
+  assert.match(errores, /Ingresa la dirección de la propiedad que quieres arrendar/);
+  assert.match(errores, /Pega el link del aviso/);
+  assert.match(errores, /name="url_publicacion"[^>]*required/);
+
+  // Con el link se identifica el portal
+  res = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, url_publicacion: url, propiedad: 'Av. Providencia 2000' }, DOCS_DEP) });
   assert.strictEqual(res.status, 200);
   const lead = ctx.db.leadPorTelefono('56987654321');
   assert.strictEqual(lead.portal, 'Mercado Libre');
-  assert.match(lead.propiedad, /providencia 2D 2B \(MLC-2754123456\)/);
+  assert.strictEqual(lead.propiedad, 'Av. Providencia 2000');
   assert.strictEqual(lead.url_publicacion, url.replace(/#.*/, ''));
   const correo = ctx.correos.find((c) => [].concat(c.to).includes('sdopropiedades@sdorent.cl'));
   assert.ok(correo.html.includes('Ver aviso'));
@@ -619,7 +627,7 @@ test('inicio de sesión del panel con página propia (sirve en el ícono del iPh
   assert.match(r.headers.get('set-cookie'), /sdo_sesion=;/);
 });
 
-test('sábados para Xiomara, bloqueos del equipo y reagendar desde el panel', async (t) => {
+test('sábados con el mismo equipo, bloqueos y reagendar desde el panel', async (t) => {
   const ctx = await preparar();
   t.after(() => ctx.server.close());
   const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
@@ -637,15 +645,15 @@ test('sábados para Xiomara, bloqueos del equipo y reagendar desde el panel', as
   assert.strictEqual(r.status, 409);
   const panel = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
   assert.match(panel, /🔒 Bloqueado/);
-  assert.match(panel, /Xiomara/);
+  assert.doesNotMatch(panel, /Xiomara/);
 
-  // El interesado agenda viernes 17:00 -> equipo de semana (Julio)
+  // El interesado agenda viernes 17:00 -> le llega a Bárbara (sdopropiedades), Julio, José y Cristian
+  const EQUIPO = ['julio.mendoza@sdorent.cl', 'sdopropiedades@sdorent.cl', 'csolisdeovando@sdocapital.cl', 'josecano@sdorent.cl'];
   await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|17' }) });
   let aviso = ctx.correos.find((c) => /Nueva visita/.test(c.subject));
-  assert.ok(aviso.to.includes('julio.mendoza@sdorent.cl'));
-  assert.ok(!aviso.to.includes('xiomara@tricapitals.com'));
+  assert.deepStrictEqual([...aviso.to].sort(), [...EQUIPO].sort());
 
-  // Julio no puede: el equipo la reagenda al sábado 17 a las 11 -> pasa a Xiomara y se quita del calendario de Julio
+  // El equipo la reagenda al sábado 17 a las 11 -> mismo equipo, mismo evento movido
   const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
   assert.match(ficha, /Reagendar: elegir nueva fecha y hora/);
   assert.match(ficha, /value="2026-10-17\|11"/);
@@ -655,12 +663,10 @@ test('sábados para Xiomara, bloqueos del equipo y reagendar desde el panel', as
   assert.match(r.headers.get('location'), /ok=reagendada_aviso/);
   const nuevos = ctx.correos.slice(antes);
   const aEquipo = nuevos.find((c) => /REAGENDADA por el equipo/.test(c.subject));
-  assert.ok(aEquipo.to.includes('xiomara@tricapitals.com'));
-  assert.ok(!aEquipo.to.includes('julio.mendoza@sdorent.cl'));
+  assert.deepStrictEqual([...aEquipo.to].sort(), [...EQUIPO].sort());
+  assert.ok(!aEquipo.to.includes('xiomara@tricapitals.com'));
   assert.match(aEquipo.icalEvent.content, /DTSTART;TZID=America\/Santiago:20261017T110000/);
-  const aJulio = nuevos.find((c) => /Visita movida/.test(c.subject));
-  assert.deepStrictEqual(aJulio.to, ['julio.mendoza@sdorent.cl']);
-  assert.strictEqual(aJulio.icalEvent.method, 'CANCEL');
+  assert.ok(!nuevos.some((c) => /Visita movida/.test(c.subject)), 'nadie sale del evento');
   const aInteresado = nuevos.find((c) => c.to === 'ana@example.com');
   assert.match(aInteresado.subject, /Reagendamos tu visita: Sábado 17 de octubre a las 11:00 hrs/);
   assert.strictEqual(ctx.db.visitaVigente(lead.id).fecha, '2026-10-17');
@@ -677,16 +683,39 @@ test('sábados para Xiomara, bloqueos del equipo y reagendar desde el panel', as
   assert.match(cal, /value="2026-10-16\|15"/);
 });
 
-test('sábado solo hasta las 15:00', async (t) => {
+test('horarios cada 1 hora: lunes a viernes de 9 a 18, sábado de 9 a 15, sin cruces', async (t) => {
   const ctx = await preparar();
   t.after(() => ctx.server.close());
   const lead = ctx.db.crearLead({ telefono: '56911110000', nombre: 'Luis', email: 'l@example.com', estado: 'aprobado' });
   const cal = await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text();
-  for (const h of [9, 11, 13, 15]) assert.match(cal, new RegExp(`value="2026-10-17\\|${h}"`));
-  assert.doesNotMatch(cal, /value="2026-10-17\|17"/);
-  assert.match(cal, /value="2026-10-16\|17"/, 'viernes sigue hasta las 17');
-  const r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-17|17' }) });
+  for (let h = 9; h <= 18; h++) assert.match(cal, new RegExp(`value="2026-10-16\\|${h}"`), `viernes ${h}:00`);
+  assert.doesNotMatch(cal, /value="2026-10-16\|19"/);
+  for (let h = 9; h <= 15; h++) assert.match(cal, new RegExp(`value="2026-10-17\\|${h}"`), `sábado ${h}:00`);
+  assert.doesNotMatch(cal, /value="2026-10-17\|16"/);
+  let r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-17|16' }) });
   assert.strictEqual(r.status, 422);
+
+  // Una hora ya tomada no se ofrece ni se puede reservar
+  const otra = ctx.db.crearLead({ telefono: '56922220000', nombre: 'Rosa', email: 'r@example.com', estado: 'aprobado' });
+  r = await fetch(`${ctx.url}/agendar/${otra.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|10' }) });
+  assert.strictEqual(r.status, 200);
+  assert.doesNotMatch(await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text(), /value="2026-10-16\|10"/);
+  r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|10' }) });
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual(ctx.db.visitaVigente(lead.id), undefined);
+});
+
+test('visitas de más de 1 hora bloquean las horas que se cruzan', async (t) => {
+  const ctx = await preparar({ AGENDA_DURACION_MINUTOS: '90' });
+  t.after(() => ctx.server.close());
+  const a = ctx.db.crearLead({ telefono: '56911110000', nombre: 'Luis', email: 'l@example.com', estado: 'aprobado' });
+  const b = ctx.db.crearLead({ telefono: '56922220000', nombre: 'Rosa', email: 'r@example.com', estado: 'aprobado' });
+  await fetch(`${ctx.url}/agendar/${a.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|11' }) });
+  const cal = await (await fetch(`${ctx.url}/agendar/${b.token}`)).text();
+  for (const h of [10, 11, 12]) assert.doesNotMatch(cal, new RegExp(`value="2026-10-16\\|${h}"`), `${h}:00 se cruza`);
+  assert.match(cal, /value="2026-10-16\|13"/);
+  const r = await fetch(`${ctx.url}/agendar/${b.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|12' }) });
+  assert.strictEqual(r.status, 409);
 });
 
 test('aprobar/rechazar: botón para volver al panel y no se notifica dos veces', async (t) => {
@@ -875,14 +904,23 @@ test('visita ingresada a mano desde el panel (agendada por otro medio)', async (
   const otro = ctx.db.crearLead({ telefono: '56933334444', nombre: 'Ana', email: 'ana@example.com', estado: 'aprobado' });
   assert.doesNotMatch(await (await fetch(`${ctx.url}/agendar/${otro.token}`)).text(), /value="2026-10-16\|11"/);
 
-  // Mismo horario ocupado: pide confirmar; con "agendar igual" se acepta
+  // Mismo horario ocupado: nunca se cruza, ni aunque se insista
   const datosAna = { fecha: '2026-10-16', hora: '11', nombre: 'Ana', telefono: '+56 9 3333 4444' };
   r = await post(datosAna);
   assert.strictEqual(r.status, 409);
-  assert.match(await r.text(), /ya tiene <strong>otra visita<\/strong>/);
-  r = await post({ ...datosAna, forzar: '1' });
+  const choque = await r.text();
+  assert.match(choque, /se cruza con la visita de <a href="\/admin\/lead\/\d+"><strong>Pedro Soto<\/strong><\/a> a las 11:00/);
+  assert.doesNotMatch(choque, /name="forzar"/);
+  assert.strictEqual((await post({ ...datosAna, forzar: '1' })).status, 409);
+  assert.strictEqual(ctx.db.visitaVigente(otro.id), undefined);
+  // Un horario bloqueado sí se puede usar si se confirma
+  ctx.db.bloquear('2026-10-16', 12, 'Reunión');
+  r = await post({ ...datosAna, hora: '12' });
+  assert.strictEqual(r.status, 409);
+  assert.match(await r.text(), /name="forzar"/);
+  r = await post({ ...datosAna, hora: '12', forzar: '1' });
   assert.strictEqual(r.status, 303);
-  assert.strictEqual(ctx.db.visitaVigente(otro.id).hora, 11);
+  assert.strictEqual(ctx.db.visitaVigente(otro.id).hora, 12);
   assert.strictEqual(ctx.db.leadPorTelefono('56933334444').id, otro.id, 'usa la ficha existente, no duplica');
 
   // Hora fuera del horario normal (10:00) también se puede y aparece en el calendario

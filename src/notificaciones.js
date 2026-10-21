@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const { esc, formatearRut, firmar, tamanoLegible } = require('./utils');
 const { filasPersona, documentoTexto, PLAZOS_CAMBIO } = require('./personas');
 const { REQUISITOS, nombreRequisito, textoRequisitosWhatsapp } = require('./requisitos');
-const { describirBloque, generarICS, horaTexto, diaSemana, textoDias } = require('./agenda');
+const { describirBloque, generarICS, horaTexto, textoDias } = require('./agenda');
 
 // Número de versión creciente para que los calendarios reemplacen el evento anterior
 const secuenciaActual = () => Math.floor(Date.now() / 1000) - 1_700_000_000;
@@ -11,8 +11,8 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
   const linkPostular = (lead) => `${config.baseUrl}/postular/${lead.token}`;
   const linkAgenda = (lead) => `${config.baseUrl}/agendar/${lead.token}`;
   const firmaRevision = (id) => firmar(config.secret, 'revision', id);
-  // Visitas de sábado: Xiomara (en vez de Julio); resto de la semana: equipo habitual
-  const destinatarios = (fecha) => (diaSemana(fecha) === 6 ? config.correo.visitasSabado : config.correo.visitas);
+  // Todas las visitas (también los sábados) le llegan al mismo equipo
+  const destinatarios = () => config.correo.visitas;
   const primerNombre = (lead) => (lead.nombre || '').trim().split(/\s+/)[0] || '';
 
   const correoHTML = (titulo, contenido) => `<!doctype html><html><body style="margin:0;background:#f3f5f9;font-family:Arial,Helvetica,sans-serif;color:#1d2433">
@@ -357,24 +357,6 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       const cuando = describirBloque(visita.fecha, visita.hora);
       const reagendada = Boolean(anterior);
       const para = destinatarios(visita.fecha);
-
-      // Si cambió de día y de responsable (semana <-> sábado), se quita el evento a quien ya no la atiende
-      if (anterior) {
-        const quitar = destinatarios(anterior.fecha).filter((d) => !para.includes(d));
-        if (quitar.length) {
-          await mailer
-            .enviar({
-              to: quitar,
-              subject: `🔁 Visita movida: ${describirBloque(anterior.fecha, anterior.hora)} → ${cuando} · ${lead.nombre}`,
-              html: correoHTML(
-                'Visita movida',
-                `<p>La visita de <strong>${esc(lead.nombre)}</strong> se movió al <strong>${esc(cuando)}</strong>, que atiende otra persona del equipo. Se quitó de tu calendario.</p>`
-              ),
-              icalEvent: { method: 'CANCEL', filename: 'visita.ics', content: this.eventoEquipo(lead, anterior, { metodo: 'CANCEL', asistentes: quitar }) },
-            })
-            .catch((e) => console.error('[correo] aviso de visita movida falló:', e.message));
-        }
-      }
 
       const quien = porEquipo ? ' por el equipo' : '';
       await mailer.enviar({

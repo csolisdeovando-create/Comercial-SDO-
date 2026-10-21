@@ -33,10 +33,11 @@ function cargarConfig(env = process.env) {
 
     // Agenda de visitas
     agenda: {
-      horas: lista(env.AGENDA_HORAS, '9,11,13,15,17').map(Number),
+      // Bloques de 1 hora: la última visita parte a las 18:00
+      horas: lista(env.AGENDA_HORAS, '9,10,11,12,13,14,15,16,17,18').map(Number),
       // Días con visitas: 1 = lunes … 6 = sábado
       diasSemana: lista(env.AGENDA_DIAS, '1,2,3,4,5,6').map(Number),
-      horasSabado: lista(env.AGENDA_HORAS_SABADO, '9,11,13,15').map(Number),
+      horasSabado: lista(env.AGENDA_HORAS_SABADO, '9,10,11,12,13,14,15').map(Number),
       diasHabiles: Number(env.AGENDA_DIAS_HABILES || 15),
       anticipacionHoras: Number(env.AGENDA_ANTICIPACION_HORAS || 2),
       cuposPorBloque: Number(env.AGENDA_CUPOS_POR_BLOQUE || 1),
@@ -52,11 +53,6 @@ function cargarConfig(env = process.env) {
       visitas: lista(
         env.EMAIL_VISITAS,
         'julio.mendoza@sdorent.cl,sdopropiedades@sdorent.cl,csolisdeovando@sdocapital.cl,josecano@sdorent.cl'
-      ),
-      // Las visitas de sábado las atiende Xiomara (en vez de Julio)
-      visitasSabado: lista(
-        env.EMAIL_VISITAS_SABADO,
-        'xiomara@tricapitals.com,sdopropiedades@sdorent.cl,csolisdeovando@sdocapital.cl,josecano@sdorent.cl'
       ),
       from: env.EMAIL_FROM || 'SDO Rent <sdopropiedades@sdorent.cl>',
       maxAdjuntosMB: Number(env.EMAIL_MAX_ADJUNTOS_MB || 20),
