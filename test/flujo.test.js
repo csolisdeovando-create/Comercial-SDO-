@@ -146,7 +146,7 @@ test('flujo completo de un lead', async (t) => {
   assert.strictEqual(r.status, 303);
   assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'agendado');
   const aEquipo = ctx.correos.find((c) => /Nueva visita/.test(c.subject));
-  assert.deepStrictEqual(aEquipo.to, ['julio.mendoza@sdorent.cl', 'sdopropiedades@sdorent.cl', 'csolisdeovando@sdocapital.cl', 'josecano@sdorent.cl']);
+  assert.deepStrictEqual(aEquipo.to, ['julio.mendoza@sdorent.cl', 'barbara.diaz@sdorent.cl', 'sdopropiedades@sdorent.cl', 'csolisdeovando@sdocapital.cl', 'josecano@sdorent.cl']);
   assert.match(aEquipo.subject, /Viernes 16 de octubre a las 09:00/);
   assert.match(aEquipo.icalEvent.content, /DTSTART;TZID=America\/Santiago:20261016T090000/);
   assert.match(ctx.wa.at(-1).texto, /Viernes 16 de octubre a las 09:00/);
@@ -648,7 +648,7 @@ test('sábados con el mismo equipo, bloqueos y reagendar desde el panel', async 
   assert.doesNotMatch(panel, /Xiomara/);
 
   // El interesado agenda viernes 17:00 -> le llega a Bárbara (sdopropiedades), Julio, José y Cristian
-  const EQUIPO = ['julio.mendoza@sdorent.cl', 'sdopropiedades@sdorent.cl', 'csolisdeovando@sdocapital.cl', 'josecano@sdorent.cl'];
+  const EQUIPO = ['julio.mendoza@sdorent.cl', 'barbara.diaz@sdorent.cl', 'sdopropiedades@sdorent.cl', 'csolisdeovando@sdocapital.cl', 'josecano@sdorent.cl'];
   await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|17' }) });
   let aviso = ctx.correos.find((c) => /Nueva visita/.test(c.subject));
   assert.deepStrictEqual([...aviso.to].sort(), [...EQUIPO].sort());

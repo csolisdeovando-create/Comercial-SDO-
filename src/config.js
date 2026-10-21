@@ -50,9 +50,10 @@ function cargarConfig(env = process.env) {
 
     correo: {
       documentos: lista(env.EMAIL_DOCUMENTOS, 'sdopropiedades@sdorent.cl,csolisdeovando@sdocapital.cl'),
+      // Bárbara va con su correo propio: sdopropiedades@ es quien envía (organizador del evento) y Google no se avisa a sí mismo
       visitas: lista(
         env.EMAIL_VISITAS,
-        'julio.mendoza@sdorent.cl,sdopropiedades@sdorent.cl,csolisdeovando@sdocapital.cl,josecano@sdorent.cl'
+        'julio.mendoza@sdorent.cl,barbara.diaz@sdorent.cl,sdopropiedades@sdorent.cl,csolisdeovando@sdocapital.cl,josecano@sdorent.cl'
       ),
       from: env.EMAIL_FROM || 'SDO Rent <sdopropiedades@sdorent.cl>',
       maxAdjuntosMB: Number(env.EMAIL_MAX_ADJUNTOS_MB || 20),
