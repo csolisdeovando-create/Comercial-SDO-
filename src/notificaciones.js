@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const { esc, formatearRut, firmar, tamanoLegible } = require('./utils');
 const { filasPersona, documentoTexto, PLAZOS_CAMBIO } = require('./personas');
 const { REQUISITOS, nombreRequisito, textoRequisitosWhatsapp } = require('./requisitos');
-const { describirBloque, generarICS, horaTexto, textoDias } = require('./agenda');
+const { describirBloque, generarICS, textoDias } = require('./agenda');
 
 // Número de versión creciente para que los calendarios reemplacen el evento anterior
 const secuenciaActual = () => Math.floor(Date.now() / 1000) - 1_700_000_000;
@@ -291,7 +291,8 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       const direccion = lead.propiedad || 'Dirección por confirmar';
       const tel = lead.telefono ? `+${lead.telefono}` : 'sin teléfono';
       const confirmada = Boolean(visita.confirmada_at);
-      const titulo = `${confirmada ? '✅ CONFIRMADA · ' : ''}Visita ${horaTexto(visita.hora)} · ${direccion} · ${lead.nombre || 'Interesado'} ${tel}`;
+      // La dirección va primero: es lo que se alcanza a leer en la vista semanal (la hora ya la muestra el calendario)
+      const titulo = `${confirmada ? '✅ ' : ''}🏠 ${direccion} · ${lead.nombre || 'Interesado'} · ${tel}`;
       const descripcion = [
         `VISITA ${config.empresa.nombre.toUpperCase()}`,
         `📅 ${describirBloque(visita.fecha, visita.hora)}`,

@@ -552,7 +552,7 @@ test('evento de calendario del equipo: información completa, confirmación, rea
   });
   await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|9' }) });
   const ev1 = ctx.correos.find((c) => /Nueva visita/.test(c.subject)).icalEvent.content.replace(/\r\n /g, '');
-  assert.match(ev1, /SUMMARY:Visita 09:00 · Rosario Sur 91\\, depto 504\\, Las Condes · Juan Pérez Soto \+56987654321/);
+  assert.match(ev1, /SUMMARY:🏠 Rosario Sur 91\\, depto 504\\, Las Condes · Juan Pérez Soto · \+56987654321/);
   assert.match(ev1, /LOCATION:Rosario Sur 91\\, depto 504\\, Las Condes/);
   assert.match(ev1, /wa\.me\/56987654321/);
   assert.match(ev1, /google\.com\/maps/);
@@ -570,7 +570,7 @@ test('evento de calendario del equipo: información completa, confirmación, rea
   assert.ok(ctx.db.visitaVigente(lead.id).confirmada_at);
   const conf = ctx.correos.find((c) => /CONFIRMADA por el interesado/.test(c.subject));
   const ev2 = conf.icalEvent.content.replace(/\r\n /g, '');
-  assert.match(ev2, /SUMMARY:✅ CONFIRMADA · Visita 09:00/);
+  assert.match(ev2, /SUMMARY:✅ 🏠 Rosario Sur 91/);
   assert.strictEqual(ev2.match(/UID:(.*)/)[1], uid, 'mismo evento');
   assert.match(await (await fetch(`${ctx.url}/visita/${lead.token}/confirmar`)).text(), /Ya confirmaste/);
   assert.match(await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text(), /El interesado confirmó su asistencia/);
@@ -974,7 +974,7 @@ test('dirección de la propiedad: no se confunde con la del interesado y se corr
   assert.ok(equipo.to.includes('julio.mendoza@sdorent.cl'));
   const ics = equipo.icalEvent.content.replace(/\r\n /g, '');
   assert.match(ics, new RegExp(`UID:visita-interesado-${lead.id}@sdorent.cl`), 'mismo evento: se reemplaza');
-  assert.match(ics, /SUMMARY:Visita 17:00 · Rosario Sur 91\\, depto 504\\, Las Condes · Chris Vivanco/);
+  assert.match(ics, /SUMMARY:🏠 Rosario Sur 91\\, depto 504\\, Las Condes · Chris Vivanco · \+56926131418/);
   assert.match(ics, /LOCATION:Rosario Sur 91/);
   assert.match(ics, /Vive en \(dirección actual del interesado\): La Tapera 2762/);
   assert.ok(nuevos.some((c) => c.to === 'chris@example.com'), 'el interesado recibe su evento corregido');

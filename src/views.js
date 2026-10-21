@@ -729,8 +729,9 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   const estadoVisita = (v) => (v.resultado ? 'realizada' : v.confirmada_at ? 'confirmada' : 'pendiente');
   const tarjetaVisita = (v) => `<a class="visita ${estadoVisita(v)}" href="/admin/lead/${v.lead_id}">
       <strong>${esc(v.nombre || 'Interesado')}</strong>
-      <span>+${esc(v.telefono || '')}</span>
-      ${v.propiedad ? `<span class="prop">🏠 ${esc(v.propiedad)}</span>` : ''}
+      ${v.propiedad ? `<span class="prop">🏠 ${esc(v.propiedad)}</span>` : '<span class="prop">🏠 Dirección por confirmar</span>'}
+      <span class="tel">📞 +${esc(v.telefono || '')}</span>
+      ${v.email ? `<span class="correo">✉️ ${esc(v.email)}</span>` : ''}
       ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : v.confirmada_at ? '<span class="res">✅ Confirmó asistencia</span>' : ''}
       ${v.origen === 'equipo' ? `<span class="tag-manual" title="Ingresada a mano por el equipo">✍️ ${esc(v.portal || 'Manual')}</span>` : ''}
     </a>`;

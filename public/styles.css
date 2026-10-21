@@ -162,7 +162,9 @@ a { color: var(--verde-texto); }
 .visita + .visita { margin-top: 4px; }
 .visita strong { display: block; color: var(--azul); }
 .visita span { display: block; color: var(--suave); }
-.visita .prop { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.visita .prop { color: var(--texto); font-weight: 600; }
+.visita .tel { white-space: nowrap; font-size: 12px; }
+.visita .correo { overflow-wrap: anywhere; font-size: 12px; }
 .visita:hover { border-left-color: var(--azul); }
 .agenda-lista { list-style: none; padding: 0; margin: 0; }
 .agenda-lista li { padding: 8px 0; border-bottom: 1px solid var(--borde); }
