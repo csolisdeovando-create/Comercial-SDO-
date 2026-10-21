@@ -833,3 +833,73 @@ test('fecha de cambio: se pide, se guarda y se ve en ficha, panel, correo y Exce
   assert.match(csv, /Fecha de cambio/);
   assert.match(csv, /Dentro de los próximos 5 días/);
 });
+
+test('visita ingresada a mano desde el panel (agendada por otro medio)', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const post = (datos) => fetch(`${ctx.url}/admin/visita/nueva`, { method: 'POST', headers: h, body: new URLSearchParams(datos), redirect: 'manual' });
+
+  // El calendario tiene el botón y el formulario viene con la fecha y hora elegidas
+  let cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(cal, /Ingresar visita/);
+  assert.match(cal, /href="\/admin\/visita\/nueva\?fecha=2026-10-16&amp;hora=11"/);
+  const form = await (await fetch(`${ctx.url}/admin/visita/nueva?fecha=2026-10-16&hora=11`, { headers: h })).text();
+  assert.match(form, /value="2026-10-16"/);
+  assert.match(form, /<option value="11" selected>/);
+
+  // Faltan datos
+  let r = await post({ fecha: '2026-10-16', hora: '11', nombre: '', telefono: '12' });
+  assert.strictEqual(r.status, 422);
+  assert.match(await r.text(), /Ingresa el nombre/);
+
+  // Visita nueva por teléfono: crea la ficha, avisa al equipo con evento de calendario y al interesado
+  r = await post({ fecha: '2026-10-16', hora: '11', nombre: 'Pedro Soto', telefono: '+56 9 1111 2222', email: 'pedro@example.com', origen: 'Llamada telefónica', propiedad: 'Rosario Sur 91', notas: 'Viene con su pareja', avisar: '1' });
+  assert.strictEqual(r.status, 303);
+  assert.match(r.headers.get('location'), /\/admin\/calendario\?semana=0&ok=manual&lead=\d+/);
+  const lead = ctx.db.leadPorTelefono('56911112222');
+  assert.strictEqual(lead.estado, 'agendado');
+  assert.strictEqual(lead.portal, 'Llamada telefónica');
+  assert.strictEqual(lead.comentarios, 'Viene con su pareja');
+  const visita = ctx.db.visitaVigente(lead.id);
+  assert.deepStrictEqual([visita.fecha, visita.hora, visita.origen], ['2026-10-16', 11, 'equipo']);
+  const equipo = ctx.correos.find((c) => /Nueva visita por el equipo/.test(c.subject));
+  assert.ok(equipo.to.includes('julio.mendoza@sdorent.cl'));
+  assert.match(equipo.icalEvent.content, /Pedro Soto/);
+  assert.ok(ctx.correos.some((c) => c.to === 'pedro@example.com'), 'confirmación al interesado');
+  cal = await (await fetch(`${ctx.url}${r.headers.get('location')}`, { headers: h })).text();
+  assert.match(cal, /Visita de <strong>Pedro Soto<\/strong> ingresada/);
+  assert.match(cal, /✍️ Llamada telefónica/);
+
+  // El horario queda ocupado para quienes agendan por el link
+  const otro = ctx.db.crearLead({ telefono: '56933334444', nombre: 'Ana', email: 'ana@example.com', estado: 'aprobado' });
+  assert.doesNotMatch(await (await fetch(`${ctx.url}/agendar/${otro.token}`)).text(), /value="2026-10-16\|11"/);
+
+  // Mismo horario ocupado: pide confirmar; con "agendar igual" se acepta
+  const datosAna = { fecha: '2026-10-16', hora: '11', nombre: 'Ana', telefono: '+56 9 3333 4444' };
+  r = await post(datosAna);
+  assert.strictEqual(r.status, 409);
+  assert.match(await r.text(), /ya tiene <strong>otra visita<\/strong>/);
+  r = await post({ ...datosAna, forzar: '1' });
+  assert.strictEqual(r.status, 303);
+  assert.strictEqual(ctx.db.visitaVigente(otro.id).hora, 11);
+  assert.strictEqual(ctx.db.leadPorTelefono('56933334444').id, otro.id, 'usa la ficha existente, no duplica');
+
+  // Hora fuera del horario normal (10:00) también se puede y aparece en el calendario
+  const antes = ctx.correos.length;
+  r = await post({ fecha: '2026-10-16', hora: '10', nombre: 'Pedro Soto', telefono: '+56 9 1111 2222' });
+  assert.strictEqual(r.status, 409, 'ya tenía visita: pide confirmar el cambio');
+  assert.match(await r.text(), /se <strong>reagenda<\/strong>/);
+  r = await post({ fecha: '2026-10-16', hora: '10', nombre: 'Pedro Soto', telefono: '+56 9 1111 2222', confirmo_existente: '1' });
+  assert.strictEqual(r.status, 303);
+  assert.strictEqual(ctx.db.visitaVigente(lead.id).hora, 10);
+  assert.ok(ctx.correos.slice(antes).some((c) => /REAGENDADA/.test(c.subject)));
+  cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(cal, /<th class="hora">10:00<\/th>/);
+
+  // Visita pasada: queda como registro, sin avisos
+  const n = ctx.correos.length;
+  r = await post({ fecha: '2026-10-13', hora: '9', nombre: 'Luis', telefono: '+56 9 5555 6666' });
+  assert.strictEqual(r.status, 303);
+  assert.strictEqual(ctx.correos.length, n);
+});

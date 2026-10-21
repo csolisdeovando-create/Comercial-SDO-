@@ -622,10 +622,68 @@ function confirmarEliminar({ lead, documentos, visita, config }) {
   );
 }
 
-function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], proximas, config }) {
+function nuevaVisita({ valores: v, errores, conflicto, existente, origenes, horas, hoy, config }) {
+  const val = (c) => esc(v[c] ?? '');
+  const reintento = conflicto || existente;
+  return layout(
+    'Ingresar visita',
+    `<section class="tarjeta angosta">
+      <a class="volver" href="/admin/calendario">← Calendario de visitas</a>
+      <h1>📝 Ingresar visita manual</h1>
+      <p class="nota">Para visitas coordinadas por teléfono, WhatsApp u otro medio. Queda en el calendario, se avisa al equipo del día y llega el evento a su calendario, igual que las demás.</p>
+      ${errores.length ? `<div class="alerta error"><strong>Revisa lo siguiente:</strong><ul>${errores.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>` : ''}
+      ${
+        existente
+          ? `<div class="alerta aviso">👤 <strong>${esc(existente.lead.nombre || 'Este interesado')}</strong> (mismo teléfono) ya tiene una visita el <strong>${esc(describirBloque(existente.visita.fecha, existente.visita.hora))}</strong>. Si continúas, se <strong>reagenda</strong> a la nueva hora y se quita la anterior. <a href="/admin/lead/${existente.lead.id}">Ver ficha</a></div>`
+          : ''
+      }
+      ${
+        conflicto
+          ? `<div class="alerta aviso">⚠️ El ${esc(describirBloque(v.fecha, Number(v.hora)))} ${conflicto === 'bloqueado' ? 'está <strong>bloqueado</strong> por el equipo' : 'ya tiene <strong>otra visita</strong>'}. Elige otra hora o confirma abajo que quieres agendarla igual.</div>`
+          : ''
+      }
+      <form method="post" action="/admin/visita/nueva" class="form-manual">
+        <fieldset>
+          <legend>Fecha y hora</legend>
+          <div class="grilla">
+            <label>Fecha<input type="date" name="fecha" required min="${sumarDias(hoy, -60)}" value="${val('fecha')}"></label>
+            <label>Hora
+              <select name="hora" required>
+                <option value="">Elige…</option>
+                ${horas.map((h) => `<option value="${h}" ${String(v.hora) === String(h) ? 'selected' : ''}>${horaTexto(h)}${config.agenda.horas.includes(h) ? '' : ' (fuera de horario)'}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          <p class="nota">Lunes a viernes atiende Julio; los sábados, Xiomara. Una fecha pasada queda solo como registro (no se envían avisos).</p>
+        </fieldset>
+        <fieldset>
+          <legend>Interesado</legend>
+          <div class="grilla">
+            <label>Nombre<input name="nombre" required value="${val('nombre')}"></label>
+            <label>Teléfono / WhatsApp<input type="tel" name="telefono" required placeholder="+56 9 1234 5678" value="${val('telefono')}"></label>
+            <label>Correo <small class="nota">(opcional)</small><input type="email" name="email" value="${val('email')}"></label>
+            <label>¿Cómo se agendó?
+              <select name="origen">${origenes.map((o) => `<option ${v.origen === o ? 'selected' : ''}>${o}</option>`).join('')}</select>
+            </label>
+          </div>
+          <label>Dirección de la propiedad<input name="propiedad" placeholder="Ej: Rosario Sur 91, depto 504, Las Condes" value="${val('propiedad')}"></label>
+          <label>Notas para el equipo <small class="nota">(opcional)</small><textarea name="notas" rows="2" placeholder="Ej: viene con su pareja, pidió estacionamiento">${val('notas')}</textarea></label>
+          <label class="check"><input type="checkbox" name="avisar" value="1" ${v.avisar ? 'checked' : ''}> Enviar confirmación al interesado (si tiene correo)</label>
+        </fieldset>
+        ${existente ? '<input type="hidden" name="confirmo_existente" value="1">' : ''}
+        ${conflicto ? '<label class="check fuerte"><input type="checkbox" name="forzar" value="1" required> Sí, agendar igual en ese horario</label>' : ''}
+        <button class="boton primario grande">${reintento ? 'Confirmar y agendar' : 'Agendar visita'}</button>
+      </form>
+    </section>`,
+    opcPanel(config, 'calendario')
+  );
+}
+
+function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], proximas, nueva = null, config }) {
   const cols = columnasSemana(config.agenda);
   const dias = cols.map((d) => sumarDias(lunes, d - 1));
-  const horas = [...new Set(dias.flatMap((f) => horasDe(config.agenda, f)))].sort((x, y) => x - y);
+  // Horas del horario normal + las de visitas ingresadas a mano fuera de horario
+  const horas = [...new Set([...dias.flatMap((f) => horasDe(config.agenda, f)), ...visitas.map((v) => v.hora)])].sort((x, y) => x - y);
   const enBloque = (f, h) => visitas.filter((v) => v.fecha === f && v.hora === h);
   const bloqueoDe = (f, h) => bloqueos.find((b) => b.fecha === f && (b.hora === null || b.hora === h));
   const diaBloqueado = (f) => bloqueos.find((b) => b.fecha === f && b.hora === null);
@@ -636,63 +694,105 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
     `<form method="post" action="/admin/bloqueos" class="form-bloqueo">${campoSemana}<input type="hidden" name="fecha" value="${f}"><input type="hidden" name="hora" value="${h ?? ''}"><button class="boton-bloquear" title="Bloquear: el equipo no puede a esta hora">${texto}</button></form>`;
   const botonDesbloquear = (b) =>
     `<form method="post" action="/admin/bloqueos/${b.id}/eliminar" class="form-bloqueo">${campoSemana}<button class="boton-bloquear" title="Volver a dejar disponible">Desbloquear</button></form>`;
+  const botonAgregar = (f, h) => `<a class="boton-agregar" href="/admin/visita/nueva?fecha=${f}&amp;hora=${h}" title="Ingresar una visita a esta hora">＋<span class="txt"> Agendar</span></a>`;
   const responsable = (f) => (new Date(`${f}T00:00:00Z`).getUTCDay() === 6 ? 'Xiomara' : 'Julio');
+  const estadoVisita = (v) => (v.resultado ? 'realizada' : v.confirmada_at ? 'confirmada' : 'pendiente');
+  const tarjetaVisita = (v) => `<a class="visita ${estadoVisita(v)}" href="/admin/lead/${v.lead_id}">
+      <strong>${esc(v.nombre || 'Interesado')}</strong>
+      <span>+${esc(v.telefono || '')}</span>
+      ${v.propiedad ? `<span class="prop">🏠 ${esc(v.propiedad)}</span>` : ''}
+      ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : v.confirmada_at ? '<span class="res">✅ Confirmó asistencia</span>' : ''}
+      ${v.origen === 'equipo' ? `<span class="tag-manual" title="Ingresada a mano por el equipo">✍️ ${esc(v.portal || 'Manual')}</span>` : ''}
+    </a>`;
+  const cuantas = (f) => visitas.filter((v) => v.fecha === f).length;
 
-  return layout(
-    'Calendario de visitas',
-    `<section class="tarjeta">
-      <div class="titulo-seccion">
-        <div><h1>Calendario de visitas</h1><span class="nota">${total ? `${total} visita(s) esta semana` : 'Sin visitas esta semana'}</span></div>
-        <div class="nav-semanas compacto">
-          <a class="boton" href="/admin/calendario?semana=${desplazamiento - 1}" aria-label="Semana anterior">‹</a>
-          <span class="titulo-semana">${esc(titulo)}</span>
-          <a class="boton" href="/admin/calendario?semana=${desplazamiento + 1}" aria-label="Semana siguiente">›</a>
-          ${desplazamiento ? '<a class="boton chico" href="/admin/calendario">Hoy</a>' : ''}
-        </div>
-      </div>
-      <p class="nota">Toca <strong>🔒</strong> en un horario (o <strong>🔒 Día</strong>) cuando el equipo no pueda atender: deja de aparecer para los interesados.</p>
-      <div class="tabla-scroll">
+  // Celda (escritorio) o fila (celular) de un horario
+  const contenidoBloque = (f, h) => {
+    const vs = enBloque(f, h);
+    const bl = bloqueoDe(f, h);
+    const enHorario = horasDe(config.agenda, f).includes(h);
+    const futuro = f >= hoy && !config.agenda.feriados.includes(f);
+    const acciones = !vs.length && futuro && !bl && enHorario ? `<div class="acciones-bloque">${botonAgregar(f, h)}${botonBloquear(f, h, '🔒')}</div>` : '';
+    return {
+      vs,
+      bl,
+      enHorario,
+      html: `${vs.map(tarjetaVisita).join('')}${
+        bl ? `<div class="bloqueo">🔒 ${esc(bl.motivo || 'Bloqueado')}${bl.hora !== null && futuro ? botonDesbloquear(bl) : ''}</div>` : acciones
+      }`,
+    };
+  };
+
+  const encabezadoDia = (f) => {
+    const [nombre, ...resto] = fechaLarga(f).split(' ');
+    return { nombre, fecha: resto.join(' ').replace(' de ', ' '), feriado: config.agenda.feriados.includes(f), bloqueo: diaBloqueado(f) };
+  };
+
+  const tabla = `<div class="tabla-scroll vista-semana">
       <table class="cal-panel" style="--ndias:${dias.length}">
         <thead><tr><th></th>${dias
           .map((f) => {
-            const [nombre, ...resto] = fechaLarga(f).split(' ');
-            const esFeriado = config.agenda.feriados.includes(f);
-            const bd = diaBloqueado(f);
-            return `<th class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${bd ? 'bloqueado' : ''}"><span>${esc(nombre)}</span><small>${esc(resto.join(' ').replace(' de ', ' '))}${esFeriado ? ' · feriado' : ''}</small>
-              <small class="responsable">${responsable(f)}</small>
-              ${f >= hoy && !esFeriado ? (bd ? botonDesbloquear(bd) : botonBloquear(f, null, '🔒 Día')) : ''}</th>`;
+            const d = encabezadoDia(f);
+            const n = cuantas(f);
+            return `<th class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${d.bloqueo ? 'bloqueado' : ''}"><span>${esc(d.nombre)}</span><small>${esc(d.fecha)}${d.feriado ? ' · feriado' : ''}</small>
+              <small class="responsable">${responsable(f)}${n ? ` · ${n} visita${n > 1 ? 's' : ''}` : ''}</small>
+              ${f >= hoy && !d.feriado ? (d.bloqueo ? botonDesbloquear(d.bloqueo) : botonBloquear(f, null, '🔒 Día')) : ''}</th>`;
           })
           .join('')}</tr></thead>
         <tbody>${horas
           .map(
             (h) => `<tr><th class="hora">${horaTexto(h)}</th>${dias
               .map((f) => {
-                if (!horasDe(config.agenda, f).includes(h)) return '<td class="na"></td>';
-                const vs = enBloque(f, h);
-                const bl = bloqueoDe(f, h);
-                const futuro = f >= hoy && !config.agenda.feriados.includes(f);
-                return `<td class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${bl ? 'bloqueado' : ''}">${vs
-                  .map(
-                    (v) => `<a class="visita" href="/admin/lead/${v.lead_id}">
-                      <strong>${esc(v.nombre)}</strong>
-                      <span>+${esc(v.telefono || '')}</span>
-                      ${v.propiedad ? `<span class="prop">🏠 ${esc(v.propiedad)}</span>` : ''}
-                      ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : v.confirmada_at ? '<span class="res">✅ Confirmó asistencia</span>' : ''}
-                    </a>`
-                  )
-                  .join('')}${
-                  bl
-                    ? `<div class="bloqueo">🔒 ${esc(bl.motivo || 'Bloqueado')}${bl.hora !== null && futuro ? botonDesbloquear(bl) : ''}</div>`
-                    : !vs.length && futuro
-                      ? botonBloquear(f, h, '🔒')
-                      : ''
-                }</td>`;
+                const c = contenidoBloque(f, h);
+                if (!c.enHorario && !c.vs.length) return '<td class="na"></td>';
+                return `<td class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${c.bl ? 'bloqueado' : ''}">${c.html}</td>`;
               })
               .join('')}</tr>`
           )
           .join('')}</tbody>
       </table>
+      </div>`;
+
+  // En el celular: un día debajo del otro, con todos sus horarios
+  const lista = `<div class="vista-dias">${dias
+    .map((f) => {
+      const d = encabezadoDia(f);
+      const filas = horas
+        .map((h) => ({ h, c: contenidoBloque(f, h) }))
+        // Días pasados: solo las horas con visitas
+        .filter(({ c }) => (f < hoy ? c.vs.length : c.enHorario || c.vs.length))
+        .map(
+          ({ h, c }) =>
+            `<li class="${c.bl ? 'bloqueado' : ''} ${c.vs.length ? 'con-visita' : ''}"><span class="hora">${horaTexto(h)}</span><div>${c.html || (f < hoy ? '' : '<span class="libre">Libre</span>')}</div></li>`
+        )
+        .join('');
+      return `<section class="dia-lista ${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''}" ${f === hoy ? 'id="hoy"' : ''}>
+        <header><div><strong>${esc(d.nombre)}</strong> ${esc(d.fecha)}${d.feriado ? ' · feriado' : ''}<small>${responsable(f)}${cuantas(f) ? ` · ${cuantas(f)} visita${cuantas(f) > 1 ? 's' : ''}` : ''}</small></div>
+          ${f >= hoy && !d.feriado ? (d.bloqueo ? botonDesbloquear(d.bloqueo) : botonBloquear(f, null, '🔒 Día')) : ''}</header>
+        ${d.bloqueo ? `<p class="bloqueo">🔒 Día bloqueado${d.bloqueo.motivo ? `: ${esc(d.bloqueo.motivo)}` : ''}</p>` : ''}
+        ${filas ? `<ul>${filas}</ul>` : '<p class="sin-visitas">Sin visitas</p>'}
+      </section>`;
+    })
+    .join('')}</div>`;
+
+  return layout(
+    'Calendario de visitas',
+    `${nueva ? `<div class="alerta ok">✅ Visita de <strong>${esc(nueva.nombre || '')}</strong> ingresada. Se avisó al equipo y se agregó a su calendario. <a href="/admin/lead/${nueva.id}">Ver ficha</a></div>` : ''}
+    <section class="tarjeta">
+      <div class="titulo-seccion">
+        <div><h1>Calendario de visitas</h1><span class="nota">${total ? `${total} visita(s) esta semana` : 'Sin visitas esta semana'}</span></div>
+        <a class="boton primario" href="/admin/visita/nueva">＋ Ingresar visita</a>
       </div>
+      <div class="nav-semanas compacto">
+        <a class="boton" href="/admin/calendario?semana=${desplazamiento - 1}" aria-label="Semana anterior">‹</a>
+        <span class="titulo-semana">${esc(titulo)}</span>
+        <a class="boton" href="/admin/calendario?semana=${desplazamiento + 1}" aria-label="Semana siguiente">›</a>
+        ${desplazamiento ? '<a class="boton chico" href="/admin/calendario">Hoy</a>' : ''}
+      </div>
+      <p class="leyenda"><span class="ley pendiente">Por confirmar</span><span class="ley confirmada">Confirmó asistencia</span><span class="ley realizada">Con resultado</span><span>✍️ Ingresada a mano</span></p>
+      <p class="nota">Toca <strong>＋</strong> en un horario libre para ingresar una visita agendada por otro medio, o <strong>🔒</strong> (o <strong>🔒 Día</strong>) cuando el equipo no pueda atender: deja de aparecer para los interesados.</p>
+      ${tabla}
+      ${lista}
     </section>
     <section class="tarjeta">
       <h1>Próximas visitas</h1>
@@ -701,7 +801,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
           ? `<ul class="agenda-lista">${proximas
               .map(
                 (v) => `<li><span class="cuando">${esc(describirBloque(v.fecha, v.hora))}</span>
-                <a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a> · ${linkWhatsapp(v.telefono)}${v.propiedad ? ` · ${esc(v.propiedad)}` : ''}</li>`
+                <a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a> · ${linkWhatsapp(v.telefono)}${v.propiedad ? ` · ${esc(v.propiedad)}` : ''}${v.origen === 'equipo' ? ' <span class="tag-manual">✍️ Manual</span>' : ''}</li>`
               )
               .join('')}</ul>`
           : '<p class="nota">No hay visitas agendadas.</p>'
@@ -711,4 +811,4 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   );
 }
 
-module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, confirmarEliminar, ingresar };
+module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, confirmarEliminar, ingresar };

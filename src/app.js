@@ -743,12 +743,18 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     res.send('\uFEFF' + filas.map((f) => f.map(celda).join(';')).join('\r\n'));
   });
 
+  const formAdmin = express.urlencoded({ extended: false });
+
+  const lunesDe = (fecha) => sumarDias(fecha, 1 - (new Date(`${fecha}T00:00:00Z`).getUTCDay() || 7));
+  // Semanas entre la actual y la de `fecha` (para volver al calendario en la semana de la visita)
+  const semanaDe = (fecha) => Math.round((Date.parse(lunesDe(fecha)) - Date.parse(lunesDe(hoyChile()))) / (7 * 864e5));
+
   app.get('/admin/calendario', (req, res) => {
     const desplazamiento = Math.max(-52, Math.min(52, parseInt(req.query.semana, 10) || 0));
     const hoy = hoyChile();
-    const lunesActual = sumarDias(hoy, 1 - (new Date(`${hoy}T00:00:00Z`).getUTCDay() || 7));
-    const lunes = sumarDias(lunesActual, desplazamiento * 7);
+    const lunes = sumarDias(lunesDe(hoy), desplazamiento * 7);
     const sabado = sumarDias(lunes, 5);
+    const nueva = req.query.ok === 'manual' ? db.leadPorId(Number(req.query.lead)) : null;
     res.send(
       vistas.calendarioPanel({
         lunes,
@@ -757,9 +763,92 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         visitas: db.visitasEntre(lunes, sabado),
         bloqueos: db.bloqueosEntre(lunes, sabado),
         proximas: db.listarVisitas(hoy),
+        nueva,
         config,
       })
     );
+  });
+
+  // Visita agendada por otro medio (teléfono, WhatsApp, portal): se ingresa a mano y queda igual que las demás
+  const ORIGENES_MANUALES = ['WhatsApp', 'Llamada telefónica', 'Mercado Libre', 'Yapo', 'Portal Inmobiliario', 'Referido', 'Otro'];
+  const HORAS_MANUALES = Array.from({ length: 13 }, (_, i) => i + 8); // 08:00 a 20:00
+
+  const formNuevaVisita = (res, valores, { errores = [], conflicto = null, existente = null, status = 200 } = {}) =>
+    res.status(status).send(
+      vistas.nuevaVisita({ valores, errores, conflicto, existente, origenes: ORIGENES_MANUALES, horas: HORAS_MANUALES, hoy: hoyChile(), config })
+    );
+
+  app.get('/admin/visita/nueva', (req, res) => {
+    const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : hoyChile();
+    const hora = HORAS_MANUALES.includes(Number(req.query.hora)) ? Number(req.query.hora) : '';
+    formNuevaVisita(res, { fecha, hora, avisar: '1' });
+  });
+
+  app.post('/admin/visita/nueva', formAdmin, async (req, res) => {
+    const b = req.body || {};
+    const txt = (c, max = 150) => String(b[c] || '').trim().slice(0, max);
+    const valores = { ...b };
+    const errores = [];
+    const hoy = hoyChile();
+    const nombre = txt('nombre');
+    const telefono = normalizarTelefono(b.telefono);
+    const email = txt('email', 150).toLowerCase();
+    const fecha = txt('fecha', 10);
+    const hora = Number(b.hora);
+    const origen = ORIGENES_MANUALES.includes(b.origen) ? b.origen : 'Otro';
+    if (!nombre) errores.push('Ingresa el nombre del interesado.');
+    if (telefono.length < 8) errores.push('Ingresa un teléfono válido (ej: +56 9 1234 5678).');
+    if (email && !emailValido(email)) errores.push('El correo no es válido (puedes dejarlo vacío).');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || Number.isNaN(Date.parse(fecha)) || fecha < sumarDias(hoy, -60) || fecha > sumarDias(hoy, 180)) {
+      errores.push('Elige una fecha válida.');
+    }
+    if (!HORAS_MANUALES.includes(hora)) errores.push('Elige la hora de la visita.');
+    if (errores.length) return formNuevaVisita(res, valores, { errores, status: 422 });
+
+    // Si ya existe (mismo teléfono) se usa su ficha; si no, se crea una nueva
+    let lead = db.leadPorTelefono(telefono);
+    const anterior = lead ? db.visitaVigente(lead.id) : null;
+    if (anterior && !b.confirmo_existente && !(anterior.fecha === fecha && anterior.hora === hora)) {
+      return formNuevaVisita(res, valores, { existente: { lead, visita: anterior }, status: 409 });
+    }
+    const ocupado = db.contarBloque(fecha, hora) >= config.agenda.cuposPorBloque && !(anterior && anterior.fecha === fecha && anterior.hora === hora);
+    if (ocupado && !b.forzar) {
+      return formNuevaVisita(res, valores, {
+        conflicto: db.bloqueado(fecha, hora) ? 'bloqueado' : 'ocupado',
+        existente: anterior ? { lead, visita: anterior } : null,
+        status: 409,
+      });
+    }
+
+    const nota = txt('notas', 1000);
+    const propiedad = txt('propiedad', 300);
+    const r = db.transaccion(() => {
+      if (!lead) {
+        lead = db.crearLead({ telefono, nombre, email: email || null, propiedad: propiedad || null, portal: origen, comentarios: nota || null });
+      } else {
+        lead = db.actualizarLead(lead.id, {
+          nombre: lead.nombre || nombre,
+          email: lead.email || email || null,
+          propiedad: propiedad || lead.propiedad,
+          portal: lead.portal || origen,
+          comentarios: nota ? [lead.comentarios, `Visita ingresada por el equipo: ${nota}`].filter(Boolean).join('\n') : lead.comentarios,
+        });
+      }
+      if (anterior && anterior.fecha === fecha && anterior.hora === hora) return { visita: anterior, sinCambio: true };
+      db.cancelarVisitasDeLead(lead.id);
+      const visita = db.crearVisita(lead.id, fecha, hora, 'equipo');
+      lead = db.actualizarLead(lead.id, { estado: 'agendado' });
+      return { visita };
+    });
+
+    // Avisos: solo visitas de hoy en adelante (una pasada es solo registro)
+    if (!r.sinCambio && fecha >= hoy) {
+      const avisar = Boolean(b.avisar) && Boolean(lead.email);
+      await notif
+        .visitaAgendada(lead, r.visita, { anterior, porEquipo: true, avisarInteresado: avisar })
+        .catch((e) => console.error('[panel] visita manual:', e));
+    }
+    res.redirect(303, `/admin/calendario?semana=${semanaDe(fecha)}&ok=manual&lead=${lead.id}`);
   });
 
   function leadAdmin(req, res) {
@@ -843,7 +932,6 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     bloque_invalido: 'Selecciona un horario válido.',
   };
   const RESULTADOS = { realizada: 'visitado', no_asistio: 'no_asistio', no_continua: 'no_continua' };
-  const formAdmin = express.urlencoded({ extended: false });
 
   app.post('/admin/lead/:id/visita', formAdmin, (req, res) => {
     const lead = leadAdmin(req, res);

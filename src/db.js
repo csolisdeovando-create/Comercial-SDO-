@@ -86,6 +86,8 @@ function migrar(db) {
   if (!visitas.includes('resultado_at')) db.exec('ALTER TABLE visitas ADD COLUMN resultado_at TEXT');
   if (!visitas.includes('confirmada_at')) db.exec('ALTER TABLE visitas ADD COLUMN confirmada_at TEXT');
   if (!visitas.includes('recordatorio_at')) db.exec('ALTER TABLE visitas ADD COLUMN recordatorio_at TEXT');
+  // 'equipo' = ingresada a mano desde el panel (agendada por teléfono u otro medio)
+  if (!visitas.includes('origen')) db.exec('ALTER TABLE visitas ADD COLUMN origen TEXT');
   const leads = columnas('leads');
   if (!leads.includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
   if (!leads.includes('plazo_cambio')) db.exec('ALTER TABLE leads ADD COLUMN plazo_cambio TEXT');
@@ -201,14 +203,14 @@ function crearRepositorio(db) {
         : db.prepare(`SELECT COUNT(*) AS n FROM visitas WHERE estado = 'confirmada' AND fecha = ? AND hora = ?`).get(fecha, hora).n,
     cancelarVisitasDeLead: (leadId) =>
       db.prepare(`UPDATE visitas SET estado = 'reagendada' WHERE lead_id = ? AND estado = 'confirmada'`).run(leadId),
-    crearVisita(leadId, fecha, hora) {
-      const r = db.prepare('INSERT INTO visitas (lead_id, fecha, hora) VALUES (?,?,?)').run(leadId, fecha, hora);
+    crearVisita(leadId, fecha, hora, origen = null) {
+      const r = db.prepare('INSERT INTO visitas (lead_id, fecha, hora, origen) VALUES (?,?,?,?)').run(leadId, fecha, hora, origen);
       return db.prepare('SELECT * FROM visitas WHERE id = ?').get(Number(r.lastInsertRowid));
     },
     listarVisitas: (desde) =>
       db
         .prepare(
-          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.tipo FROM visitas v
+          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.tipo, l.portal FROM visitas v
            JOIN leads l ON l.id = v.lead_id WHERE v.estado = 'confirmada' AND v.fecha >= ?
            ORDER BY v.fecha, v.hora`
         )
@@ -217,7 +219,7 @@ function crearRepositorio(db) {
     visitasEntre: (desde, hasta) =>
       db
         .prepare(
-          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.tipo FROM visitas v
+          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.tipo, l.portal FROM visitas v
            JOIN leads l ON l.id = v.lead_id WHERE v.estado = 'confirmada' AND v.fecha BETWEEN ? AND ?
            ORDER BY v.fecha, v.hora`
         )
