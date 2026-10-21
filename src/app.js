@@ -716,7 +716,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
     };
     const filas = [
-      ['N°', 'Fecha postulación', 'Nombre', 'RUT', 'Tipo', 'Razón social', 'Correo', 'Teléfono', 'Propiedad', 'Link aviso', 'Origen', 'Estado', 'Visita', 'Resultado visita', 'Documentos', 'Complementa renta / aval', 'Documento', 'Nacionalidad', 'Fecha nacimiento', 'Estado civil', 'Profesión', 'Dirección actual', 'Comuna', 'Fecha de cambio'],
+      ['N°', 'Fecha postulación', 'Nombre', 'RUT', 'Tipo', 'Razón social', 'Correo', 'Teléfono', 'Propiedad de interés', 'Link de publicación', 'Origen', 'Estado', 'Visita', 'Resultado visita', 'Documentos', 'Complementa renta / aval', 'Documento', 'Nacionalidad', 'Fecha nacimiento', 'Estado civil', 'Profesión', 'Dirección actual', 'Comuna', 'Fecha de cambio'],
       ...db.listarLeads(100000).map((l) => [
         l.id,
         (l.documentos_at || l.created_at || '').slice(0, 10),

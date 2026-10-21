@@ -289,6 +289,14 @@ function revision({ lead, documentos, accion, firma, config }) {
   );
 }
 
+// El interesado escribió su propia dirección como la de la propiedad
+const soloLetras = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const mismaDireccion = (lead) => {
+  const p = soloLetras(lead.propiedad);
+  const d = soloLetras(lead.direccion_actual);
+  return p.length >= 6 && d.length >= 6 && (p.includes(d) || d.includes(p));
+};
+
 const etiquetaComp = (lead) => (lead.comp_rol === 'aval' ? 'Aval' : 'Complementa renta');
 
 function fichaLead(lead) {
@@ -298,9 +306,10 @@ function fichaLead(lead) {
     ${fila('Tipo', REQUISITOS[lead.tipo]?.etiqueta)}
     ${fila('Razón social', lead.razon_social)}
     ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
-    ${fila('Propiedad', lead.propiedad)}
+    ${fila('Propiedad de interés', lead.propiedad)}
+    ${mismaDireccion(lead) ? '<tr><th></th><td><span class="aviso-dup">⚠️ Es igual a su dirección actual: confirma con el interesado cuál propiedad quiere visitar y corrígela abajo.</span></td></tr>' : ''}
     ${fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
-    ${lead.url_publicacion ? `<tr><th>Publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : ''}
+    ${lead.url_publicacion ? `<tr><th>Link de publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : '<tr><th>Link de publicación</th><td class="nota">No lo indicó</td></tr>'}
     ${fila('Origen', lead.portal)}
     ${fila('Comentarios', lead.comentarios)}
   </table>

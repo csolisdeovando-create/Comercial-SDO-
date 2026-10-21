@@ -922,6 +922,8 @@ test('dirección de la propiedad: no se confunde con la del interesado y se corr
   const visita = ctx.db.crearVisita(lead.id, '2026-10-16', 17);
   const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
   assert.match(ficha, /Corregir la dirección de la propiedad a visitar/);
+  assert.match(ficha, /Es igual a su dirección actual/);
+  assert.match(ficha, /Link de publicación<\/th><td class="nota">No lo indicó/);
   const antes = ctx.correos.length;
   r = await fetch(`${ctx.url}/admin/lead/${lead.id}/propiedad`, {
     method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ propiedad: 'Rosario Sur 91, depto 504, Las Condes', avisar: '1' }),

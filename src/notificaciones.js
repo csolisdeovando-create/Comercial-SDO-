@@ -36,8 +36,8 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       ${filasPersona(lead).map(([k, v]) => fila(k, v)).join('')}
       ${fila('Tipo', REQUISITOS[lead.tipo]?.etiqueta)}${fila('Razón social', lead.razon_social)}
       ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
-      ${fila('Propiedad', lead.propiedad)}${fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
-      ${lead.url_publicacion ? `<tr><td style="padding:6px 10px;color:#5a6478;width:150px">Publicación</td><td style="padding:6px 10px"><a href="${esc(lead.url_publicacion)}">Ver aviso</a></td></tr>` : ''}
+      ${fila('Propiedad de interés', lead.propiedad)}${fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
+      ${lead.url_publicacion ? `<tr><td style="padding:6px 10px;color:#5a6478;width:150px">Link de publicación</td><td style="padding:6px 10px"><a href="${esc(lead.url_publicacion)}">Ver aviso</a></td></tr>` : ''}
       ${fila('Origen', lead.portal)}${fila('Comentarios', lead.comentarios)}`);
     const comp = lead.complementa
       ? `<p style="margin:16px 0 0"><strong>👥 ${lead.comp_rol === 'aval' ? 'Aval' : 'Complementa renta'}${lead.comp_relacion ? ` (${esc(lead.comp_relacion)})` : ''}</strong></p>` +
@@ -297,8 +297,8 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         `📅 ${describirBloque(visita.fecha, visita.hora)}`,
         confirmada ? '✅ El interesado CONFIRMÓ su asistencia' : '⏳ Pendiente de confirmación del interesado',
         '',
-        `🏠 Propiedad: ${direccion}`,
-        lead.url_publicacion ? `🔗 Aviso: ${lead.url_publicacion}` : null,
+        `🏠 Propiedad de interés: ${direccion}`,
+        `🔗 Link de publicación: ${lead.url_publicacion || 'no lo indicó'}`,
         lead.propiedad ? `📍 Mapa: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.propiedad)}` : null,
         '',
         `👤 Interesado: ${lead.nombre || '-'}${lead.rut ? ` (${documentoTexto(lead)})` : ''}`,
