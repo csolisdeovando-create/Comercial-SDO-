@@ -330,3 +330,22 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 .editar-propiedad summary { cursor: pointer; font-weight: 600; color: var(--azul); font-size: 14px; }
 .editar-propiedad form { margin-top: 10px; display: grid; gap: 8px; }
 .editar-propiedad .boton { justify-self: start; }
+
+/* Listas del panel en el celular: cada fila es una tarjeta, sin desplazamiento lateral */
+.solo-movil { display: none; }
+@media (max-width: 640px) {
+  .tabla-movil thead { display: none; }
+  .tabla-movil, .tabla-movil tbody { display: block; }
+  .tabla-movil tr { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--borde); }
+  .tabla-movil td { border: 0; padding: 0; }
+  .tabla-movil td.col-principal { flex: 1 1 100%; }
+  .tabla-movil td.col-id, .tabla-movil td.col-hora { display: none; }
+  .tabla-movil td.col-prop { flex: 1 1 100%; color: var(--suave); }
+  .tabla-movil td:empty { display: none; }
+  .tabla-movil .solo-movil { display: inline; }
+  .tabla-movil tr:first-child { padding-top: 4px; }
+}
+.fila-agendar select { min-width: 0; max-width: 100%; }
+@media (max-width: 640px) { .fila-agendar select { flex-basis: 100%; } }
+.form-agendar { grid-template-columns: minmax(0, 1fr); }
+.form-agendar .fila-agendar select { width: 100%; }

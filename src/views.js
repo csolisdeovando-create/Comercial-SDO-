@@ -362,7 +362,7 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
     .map(([k, t]) => `<option value="${k}" ${filtros.estado === k ? 'selected' : ''}>${esc(t)}</option>`)
     .join('');
   const filaVisita = (v) =>
-    `<tr><td>${esc(fechaLarga(v.fecha))}</td><td>${horaTexto(v.hora)}</td><td><a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a></td><td>${linkWhatsapp(v.telefono)}</td><td>${esc(v.propiedad || '—')}</td></tr>`;
+    `<tr><td class="col-principal">${esc(fechaLarga(v.fecha))}<span class="solo-movil"> · ${horaTexto(v.hora)}</span></td><td class="col-hora">${horaTexto(v.hora)}</td><td><a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a></td><td>${linkWhatsapp(v.telefono)}</td><td class="col-prop">${esc(v.propiedad || '—')}</td></tr>`;
 
   return layout(
     'Panel comercial',
@@ -392,7 +392,7 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
       <div class="titulo-seccion"><h1>Próximas visitas</h1><a class="boton chico" href="/admin/calendario">Ver calendario</a></div>
       ${
         visitas.length
-          ? `<div class="tabla-scroll"><table class="tabla"><thead><tr><th>Fecha</th><th>Hora</th><th>Interesado</th><th>Teléfono</th><th>Propiedad</th></tr></thead><tbody>
+          ? `<div class="tabla-scroll"><table class="tabla tabla-movil"><thead><tr><th>Fecha</th><th>Hora</th><th>Interesado</th><th>Teléfono</th><th>Propiedad</th></tr></thead><tbody>
           ${visitas.slice(0, 8).map(filaVisita).join('')}</tbody></table></div>`
           : '<p class="nota">No hay visitas agendadas.</p>'
       }
@@ -411,14 +411,14 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
         ${filtrando ? '<a class="boton chico" href="/admin#interesados">Limpiar</a>' : ''}
       </form>
       ${filtrando ? `<p class="nota">${leads.length} resultado(s)</p>` : ''}
-      <div class="tabla-scroll"><table class="tabla"><thead><tr><th>#</th><th>Nombre</th><th>Teléfono</th><th>Origen</th><th>Estado</th><th>Documentos</th><th></th></tr></thead><tbody>
+      <div class="tabla-scroll"><table class="tabla tabla-movil"><thead><tr><th>#</th><th>Nombre</th><th>Teléfono</th><th>Origen</th><th>Estado</th><th>Documentos</th><th></th></tr></thead><tbody>
       ${
         leads.length
           ? leads
               .map(
                 (l) => `<tr>
-          <td>${l.id}</td>
-          <td><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}${PLAZO_CORTO[l.plazo_cambio] ? ` <span class="tag-plazo plazo-${l.plazo_cambio}" title="${PLAZOS_CAMBIO[l.plazo_cambio]}">🚚 ${PLAZO_CORTO[l.plazo_cambio]}</span>` : ''}<br><small>${esc(l.email || '')}</small>
+          <td class="col-id">${l.id}</td>
+          <td class="col-principal"><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}${PLAZO_CORTO[l.plazo_cambio] ? ` <span class="tag-plazo plazo-${l.plazo_cambio}" title="${PLAZOS_CAMBIO[l.plazo_cambio]}">🚚 ${PLAZO_CORTO[l.plazo_cambio]}</span>` : ''}<br><small>${esc(l.email || '')}</small>
             ${l.duplicados ? `<br><span class="aviso-dup" title="Mismo teléfono o RUT que #${esc(l.duplicados)}">⚠️ Posible duplicado de ${l.duplicados.split(',').map((d) => `<a href="/admin/lead/${esc(d)}">#${esc(d)}</a>`).join(', ')}</span>` : ''}</td>
           <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>
