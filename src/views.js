@@ -1,6 +1,7 @@
 const { esc, formatearRut, tamanoLegible } = require('./utils');
 const { REQUISITOS, nombreRequisito } = require('./requisitos');
 const { formularioPersona, filasPersona, PLAZOS_CAMBIO } = require('./personas');
+const { faltaDireccion } = require('./publicacion');
 
 const PLAZO_CORTO = { '5_dias': '5 días', '15_dias': '15 días', '1_mes': '1 mes', mas_1_mes: '+1 mes' };
 const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSemana, textoDias } = require('./agenda');
@@ -307,6 +308,7 @@ function fichaLead(lead) {
     ${fila('Razón social', lead.razon_social)}
     ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
     ${fila('Propiedad de interés', lead.propiedad)}
+    ${faltaDireccion(lead.propiedad) ? '<tr><th></th><td><span class="aviso-dup">⚠️ Falta la dirección exacta (el interesado pegó el link). Revisa el aviso y escríbela abajo para que Julio la vea en el calendario.</span></td></tr>' : ''}
     ${mismaDireccion(lead) ? '<tr><th></th><td><span class="aviso-dup">⚠️ Es igual a su dirección actual: confirma con el interesado cuál propiedad quiere visitar y corrígela abajo.</span></td></tr>' : ''}
     ${fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
     ${lead.url_publicacion ? `<tr><th>Link de publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : '<tr><th>Link de publicación</th><td class="nota">No lo indicó</td></tr>'}
@@ -545,10 +547,11 @@ function formAgendar(lead, disponibles, reagendar) {
 
 function formPropiedad(lead, visita) {
   const conVisita = visita && visita.estado === 'confirmada' && !visita.resultado;
-  return `<details class="editar-propiedad" ${lead.propiedad ? '' : 'open'}>
+  const falta = !lead.propiedad || faltaDireccion(lead.propiedad);
+  return `<details class="editar-propiedad" ${falta ? 'open' : ''}>
       <summary>✏️ ${lead.propiedad ? 'Corregir la dirección de la propiedad a visitar' : 'Agregar la dirección de la propiedad a visitar'}</summary>
       <form method="post" action="/admin/lead/${lead.id}/propiedad">
-        <label>Dirección de la propiedad en arriendo<input name="propiedad" required maxlength="300" value="${esc(lead.propiedad || '')}" placeholder="Ej: Rosario Sur 91, depto 504, Las Condes"></label>
+        <label>Dirección de la propiedad en arriendo<input name="propiedad" required maxlength="300" value="${esc(falta ? '' : lead.propiedad || '')}" placeholder="Ej: Rosario Sur 91, depto 504, Las Condes"></label>
         ${conVisita ? `<p class="nota">Se actualiza el evento de la visita en el calendario del equipo (título y ubicación).</p>
         <label class="check"><input type="checkbox" name="avisar" value="1"> Enviar también al interesado su evento con la dirección correcta</label>` : ''}
         <button class="boton primario">Guardar dirección</button>
@@ -729,7 +732,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   const estadoVisita = (v) => (v.resultado ? 'realizada' : v.confirmada_at ? 'confirmada' : 'pendiente');
   const tarjetaVisita = (v) => `<a class="visita ${estadoVisita(v)}" href="/admin/lead/${v.lead_id}">
       <strong>${esc(v.nombre || 'Interesado')}</strong>
-      ${v.propiedad ? `<span class="prop">🏠 ${esc(v.propiedad)}</span>` : '<span class="prop">🏠 Dirección por confirmar</span>'}
+      ${v.propiedad ? `<span class="prop ${faltaDireccion(v.propiedad) ? 'falta' : ''}">🏠 ${esc(v.propiedad)}</span>` : '<span class="prop falta">🏠 Dirección por confirmar</span>'}
       <span class="tel">📞 +${esc(v.telefono || '')}</span>
       ${v.email ? `<span class="correo">✉️ ${esc(v.email)}</span>` : ''}
       ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : v.confirmada_at ? '<span class="res">✅ Confirmó asistencia</span>' : ''}

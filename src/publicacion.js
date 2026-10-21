@@ -162,4 +162,18 @@ function resumenPropiedad(p) {
   return partes.join(' ').slice(0, 300);
 }
 
-module.exports = { interpretarUrl, leerPublicacion, resumenPropiedad, portalDeHost };
+// El interesado pegó un link donde iba la dirección
+const FALTA_DIRECCION = '(falta dirección)';
+const pareceLink = (t) => /^\s*(https?:\/\/|www\.)\S+$/i.test(String(t || '')) || /^\s*\S+\.(cl|com)\/\S*$/i.test(String(t || ''));
+const faltaDireccion = (propiedad) => String(propiedad || '').includes(FALTA_DIRECCION);
+
+// Texto legible en vez del link: "Edificio torre mayor 2D1B piso 20 · Yapo (falta dirección)"
+function propiedadDesdeLink(texto) {
+  const p = interpretarUrl(texto);
+  if (!p) return FALTA_DIRECCION;
+  const desc = (p.descripcion || '').replace(/^(alquiler|arriendo|venta)\s+(apartamentos|departamentos|casas|oficinas)\s+/i, '');
+  const nombre = desc ? desc.charAt(0).toUpperCase() + desc.slice(1) : 'Propiedad';
+  return `${nombre}${p.portal ? ` · ${p.portal}` : ''} ${FALTA_DIRECCION}`.slice(0, 300);
+}
+
+module.exports = { interpretarUrl, leerPublicacion, resumenPropiedad, portalDeHost, pareceLink, propiedadDesdeLink, faltaDireccion, FALTA_DIRECCION };

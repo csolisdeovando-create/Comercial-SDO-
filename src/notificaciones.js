@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const { esc, formatearRut, firmar, tamanoLegible } = require('./utils');
 const { filasPersona, documentoTexto, PLAZOS_CAMBIO } = require('./personas');
+const { faltaDireccion } = require('./publicacion');
 const { REQUISITOS, nombreRequisito, textoRequisitosWhatsapp } = require('./requisitos');
 const { describirBloque, generarICS, textoDias } = require('./agenda');
 
@@ -300,7 +301,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         '',
         `🏠 Propiedad de interés: ${direccion}`,
         `🔗 Link de publicación: ${lead.url_publicacion || 'no lo indicó'}`,
-        lead.propiedad ? `📍 Mapa: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.propiedad)}` : null,
+        lead.propiedad && !faltaDireccion(lead.propiedad) ? `📍 Mapa: https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.propiedad)}` : null,
         '',
         `👤 Interesado: ${lead.nombre || '-'}${lead.rut ? ` (${documentoTexto(lead)})` : ''}`,
         `📞 Teléfono: ${tel}`,

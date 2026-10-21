@@ -349,3 +349,4 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 @media (max-width: 640px) { .fila-agendar select { flex-basis: 100%; } }
 .form-agendar { grid-template-columns: minmax(0, 1fr); }
 .form-agendar .fila-agendar select { width: 100%; }
+.visita .prop.falta { color: var(--rojo); }

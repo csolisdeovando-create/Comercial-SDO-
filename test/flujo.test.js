@@ -982,3 +982,44 @@ test('dirección de la propiedad: no se confunde con la del interesado y se corr
   assert.match(cal, /🏠 Rosario Sur 91/);
   assert.ok(visita);
 });
+
+test('link pegado en la dirección: se corrige en las fichas existentes y se rechaza en el formulario', async (t) => {
+  // Fichas guardadas antes: el link pasa a "Link de publicación" y la dirección queda legible
+  const archivo = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sdo-mig-')), 'c.db');
+  const ML = 'https://departamento.mercadolibre.cl/MLC-4545912406-edificio-cicarelli-ll-1d1b-piso-14-185176-_JM';
+  const YAPO = 'https://www.yapo.cl/bienes-raices-alquiler-apartamentos/edificio-torre-mayor-2d1b-piso-20/33089831';
+  let db = abrirDB(archivo);
+  const a = db.crearLead({ telefono: '56996704082', nombre: 'Nicolas Millares', propiedad: ML });
+  const b = db.crearLead({ telefono: '56995818737', nombre: 'Marcelo Rivera', propiedad: YAPO, url_publicacion: YAPO });
+  const c = db.crearLead({ telefono: '56911110000', nombre: 'Otra', propiedad: 'Rosario Sur 91' });
+  db = abrirDB(archivo);
+  const la = db.leadPorId(a.id);
+  assert.strictEqual(la.url_publicacion, ML);
+  assert.strictEqual(la.propiedad, 'Edificio cicarelli ll 1d1b piso 14 · Mercado Libre (falta dirección)');
+  assert.strictEqual(db.leadPorId(b.id).propiedad, 'Edificio torre mayor 2d1b piso 20 · Yapo (falta dirección)');
+  assert.strictEqual(db.leadPorId(c.id).propiedad, 'Rosario Sur 91', 'una dirección normal no se toca');
+
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+
+  // En el formulario: el link se mueve a su campo y se pide la dirección
+  const r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, url_publicacion: '', propiedad: ML }, DOCS_DEP) });
+  assert.strictEqual(r.status, 422);
+  const html = await r.text();
+  assert.match(html, /escribe la dirección \(calle, número y comuna\)/);
+  assert.match(html, new RegExp(`name="url_publicacion"[^>]*value="${ML.replace(/[.?]/g, '\\$&')}"`));
+
+  // En el calendario y la ficha se ve la advertencia, nunca el link
+  const lead = ctx.db.crearLead({ telefono: '56996704082', nombre: 'Nicolas', propiedad: 'Edificio cicarelli · Mercado Libre (falta dirección)', url_publicacion: ML, estado: 'agendado' });
+  ctx.db.crearVisita(lead.id, '2026-10-16', 17);
+  const cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(cal, /class="prop falta">🏠 Edificio cicarelli/);
+  assert.doesNotMatch(cal, /mercadolibre\.cl/);
+  const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Falta la dirección exacta/);
+  assert.match(ficha, /<details class="editar-propiedad" open>/);
+  // Corregir con un link tampoco se acepta
+  const rr = await fetch(`${ctx.url}/admin/lead/${lead.id}/propiedad`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ propiedad: ML }) });
+  assert.match(rr.headers.get('location'), /ok=propiedad_link/);
+});

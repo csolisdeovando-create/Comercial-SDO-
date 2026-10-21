@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
+const { pareceLink, propiedadDesdeLink } = require('./publicacion');
 
 const ESQUEMA = `
 CREATE TABLE IF NOT EXISTS leads (
@@ -100,6 +101,15 @@ function migrar(db) {
     ...personales.map((c) => `comp_${c} TEXT`),
   ]) {
     if (!leads.includes(col.split(' ')[0])) db.exec(`ALTER TABLE leads ADD COLUMN ${col}`);
+  }
+  // El interesado pegó el link del aviso en la dirección: el link pasa a "Link de publicación"
+  // y en la dirección queda un texto legible para el calendario (nada se pierde)
+  for (const l of db.prepare(`SELECT id, propiedad, url_publicacion, comentarios FROM leads WHERE propiedad LIKE '%http%' OR propiedad LIKE 'www.%'`).all()) {
+    if (!pareceLink(l.propiedad)) continue;
+    const link = l.propiedad.trim();
+    const cambios = { propiedad: propiedadDesdeLink(link), url_publicacion: l.url_publicacion || link, comentarios: l.comentarios };
+    if (l.url_publicacion && l.url_publicacion !== link) cambios.comentarios = [l.comentarios, `Link indicado como dirección: ${link}`].filter(Boolean).join('\n');
+    db.prepare('UPDATE leads SET propiedad = ?, url_publicacion = ?, comentarios = ? WHERE id = ?').run(cambios.propiedad, cambios.url_publicacion, cambios.comentarios, l.id);
   }
 }
 

@@ -9,7 +9,7 @@ const { REQUISITOS, TIPOS, PREFIJO_COMP, esComplemento, todosLosCampos, nombreRe
 const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias, horasDe } = require('./agenda');
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
-const { interpretarUrl, leerPublicacion, resumenPropiedad } = require('./publicacion');
+const { interpretarUrl, leerPublicacion, resumenPropiedad, pareceLink, faltaDireccion } = require('./publicacion');
 const { validarPersona, CAMPOS_PERSONA, filasPersona, PLAZOS_CAMBIO } = require('./personas');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
@@ -253,7 +253,14 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       errores.push(...titular.errores);
       const plazoCambio = PLAZOS_CAMBIO[b.plazo_cambio] ? b.plazo_cambio : null;
       if (!plazoCambio) errores.push('Indica para cuándo te quieres cambiar.');
-      if (!String(b.propiedad || '').trim()) errores.push('Ingresa la dirección de la propiedad que quieres arrendar.');
+      // Pegó el link en la dirección: se mueve al campo del link y se le pide la dirección
+      if (pareceLink(b.propiedad)) {
+        if (!String(b.url_publicacion || '').trim()) b.url_publicacion = String(b.propiedad).trim();
+        b.propiedad = '';
+        errores.push('En "Dirección de la propiedad" escribe la dirección (calle, número y comuna). El link del aviso va en el campo de arriba.');
+      } else if (!String(b.propiedad || '').trim()) {
+        errores.push('Ingresa la dirección de la propiedad que quieres arrendar.');
+      }
       if (!interpretarUrl(String(b.url_publicacion || '').slice(0, 2000))) {
         errores.push('Pega el link del aviso de la propiedad que te interesa (Mercado Libre, Yapo, Portal Inmobiliario…).');
       }
@@ -816,6 +823,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       errores.push('Elige una fecha válida.');
     }
     if (!HORAS_MANUALES.includes(hora)) errores.push('Elige la hora de la visita.');
+    if (pareceLink(b.propiedad)) errores.push('En la dirección de la propiedad va la calle y número, no el link del aviso.');
     if (errores.length) return formNuevaVisita(res, valores, { errores, status: 422 });
 
     // Si ya existe (mismo teléfono) se usa su ficha; si no, se crea una nueva
@@ -947,6 +955,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     bloque_ocupado: 'Ese horario ya está ocupado o bloqueado. Elige otro.',
     bloque_invalido: 'Selecciona un horario válido.',
     propiedad: 'Dirección de la propiedad guardada.',
+    propiedad_link: 'No se guardó: en la dirección va la calle y número, no el link del aviso.',
     propiedad_evento: 'Dirección de la propiedad guardada. Se actualizó el evento de la visita en el calendario del equipo.',
   };
   const RESULTADOS = { realizada: 'visitado', no_asistio: 'no_asistio', no_continua: 'no_continua' };
@@ -997,6 +1006,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     let lead = leadAdmin(req, res);
     if (!lead) return;
     const propiedad = String(req.body?.propiedad || '').trim().slice(0, 300);
+    if (pareceLink(propiedad)) return res.redirect(303, `/admin/lead/${lead.id}?ok=propiedad_link`);
     if (!propiedad || propiedad === lead.propiedad) return res.redirect(303, `/admin/lead/${lead.id}`);
     lead = db.actualizarLead(lead.id, { propiedad });
     const visita = db.visitaVigente(lead.id);
