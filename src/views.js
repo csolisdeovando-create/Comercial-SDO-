@@ -131,11 +131,15 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
             <label>Razón social (si postulas como empresa)<input name="razon_social" value="${val('razon_social')}"></label>
             <label>RUT empresa<input name="rut_empresa" placeholder="76.123.456-7" value="${esc(v.rut_empresa ? formatearRut(v.rut_empresa) : '')}" data-rut></label>
           </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>La propiedad que quieres arrendar</legend>
           <label for="url_publicacion">Link de la publicación que te interesa
             <input id="url_publicacion" name="url_publicacion" type="text" inputmode="url" autocomplete="off" placeholder="Pega aquí el link del aviso (Mercado Libre, Yapo, Portal Inmobiliario…)" value="${val('url_publicacion')}" data-publicacion>
           </label>
           <div class="vista-publicacion" id="vista-publicacion" hidden aria-live="polite"></div>
-          <label for="propiedad">Dirección de la propiedad <small class="nota">(si no la sabes, basta con el link)</small>
+          <label for="propiedad">Dirección de la propiedad que quieres arrendar <small class="nota">(la del aviso, no tu dirección actual; si no la sabes, basta con el link)</small>
             <input id="propiedad" name="propiedad" placeholder="Ej: Rosario Sur 91, depto 504, Las Condes" value="${val('propiedad')}">
           </label>
           <div class="campo-plazo" role="radiogroup" aria-labelledby="plazo-titulo">
@@ -450,6 +454,7 @@ function fichaAdmin({ lead, documentos, visita, disponibles, firma, aviso, confi
       </div>
       ${lead.motivo_rechazo ? `<div class="alerta error">Motivo informado: ${esc(lead.motivo_rechazo)}</div>` : ''}
       ${fichaLead(lead)}
+      ${formPropiedad(lead, visita)}
       ${lead.mensaje_inicial ? `<p class="nota">Primer mensaje por WhatsApp: “${esc(lead.mensaje_inicial)}”</p>` : ''}
     </section>
 
@@ -527,6 +532,19 @@ function formAgendar(lead, disponibles, reagendar) {
       </div>
       <label class="check"><input type="checkbox" name="avisar" value="1" checked> Avisar al interesado (correo y WhatsApp) con la ${reagendar ? 'nueva ' : ''}hora</label>
     </form>`;
+}
+
+function formPropiedad(lead, visita) {
+  const conVisita = visita && visita.estado === 'confirmada' && !visita.resultado;
+  return `<details class="editar-propiedad" ${lead.propiedad ? '' : 'open'}>
+      <summary>✏️ ${lead.propiedad ? 'Corregir la dirección de la propiedad a visitar' : 'Agregar la dirección de la propiedad a visitar'}</summary>
+      <form method="post" action="/admin/lead/${lead.id}/propiedad">
+        <label>Dirección de la propiedad en arriendo<input name="propiedad" required maxlength="300" value="${esc(lead.propiedad || '')}" placeholder="Ej: Rosario Sur 91, depto 504, Las Condes"></label>
+        ${conVisita ? `<p class="nota">Se actualiza el evento de la visita en el calendario del equipo (título y ubicación).</p>
+        <label class="check"><input type="checkbox" name="avisar" value="1"> Enviar también al interesado su evento con la dirección correcta</label>` : ''}
+        <button class="boton primario">Guardar dirección</button>
+      </form>
+    </details>`;
 }
 
 function seccionVisita(lead, visita, disponibles) {

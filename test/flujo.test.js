@@ -903,3 +903,42 @@ test('visita ingresada a mano desde el panel (agendada por otro medio)', async (
   assert.strictEqual(r.status, 303);
   assert.strictEqual(ctx.correos.length, n);
 });
+
+test('dirección de la propiedad: no se confunde con la del interesado y se corrige desde la ficha', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+
+  // Puso su propia dirección como la de la propiedad -> se le explica
+  let r = await fetch(`${ctx.url}/postular`, {
+    method: 'POST',
+    body: formulario({ ...DATOS, direccion_actual: 'La Tapera 2762', propiedad: 'la tapera 2762, Maipú' }, DOCS_DEP),
+  });
+  assert.strictEqual(r.status, 422);
+  assert.match(await r.text(), /no tu dirección actual/);
+
+  // Visita agendada con la dirección equivocada; el equipo la corrige y el evento se actualiza
+  const lead = ctx.db.crearLead({ telefono: '56926131418', nombre: 'Chris Vivanco', email: 'chris@example.com', propiedad: 'La Tapera 2762', direccion_actual: 'La Tapera 2762', estado: 'agendado' });
+  const visita = ctx.db.crearVisita(lead.id, '2026-10-16', 17);
+  const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Corregir la dirección de la propiedad a visitar/);
+  const antes = ctx.correos.length;
+  r = await fetch(`${ctx.url}/admin/lead/${lead.id}/propiedad`, {
+    method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ propiedad: 'Rosario Sur 91, depto 504, Las Condes', avisar: '1' }),
+  });
+  assert.strictEqual(r.status, 303);
+  assert.match(r.headers.get('location'), /ok=propiedad_evento/);
+  assert.strictEqual(ctx.db.leadPorId(lead.id).propiedad, 'Rosario Sur 91, depto 504, Las Condes');
+  const nuevos = ctx.correos.slice(antes);
+  const equipo = nuevos.find((c) => /Dirección corregida/.test(c.subject));
+  assert.ok(equipo.to.includes('julio.mendoza@sdorent.cl'));
+  const ics = equipo.icalEvent.content.replace(/\r\n /g, '');
+  assert.match(ics, new RegExp(`UID:visita-interesado-${lead.id}@sdorent.cl`), 'mismo evento: se reemplaza');
+  assert.match(ics, /SUMMARY:Visita 17:00 · Rosario Sur 91\\, depto 504\\, Las Condes · Chris Vivanco/);
+  assert.match(ics, /LOCATION:Rosario Sur 91/);
+  assert.match(ics, /Vive en \(dirección actual del interesado\): La Tapera 2762/);
+  assert.ok(nuevos.some((c) => c.to === 'chris@example.com'), 'el interesado recibe su evento corregido');
+  const cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(cal, /🏠 Rosario Sur 91/);
+  assert.ok(visita);
+});

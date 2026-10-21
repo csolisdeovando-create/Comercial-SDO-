@@ -232,6 +232,37 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       );
     },
 
+    // Se corrigió la dirección de la propiedad: el evento del equipo se reemplaza (mismo UID, nueva secuencia)
+    async propiedadCorregida(lead, visita, { avisarInteresado = false } = {}) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      await mailer.enviar({
+        to: destinatarios(visita.fecha),
+        subject: `📍 Dirección corregida: visita ${cuando} · ${lead.propiedad} · ${lead.nombre}`,
+        html: correoHTML(
+          'Dirección de la visita corregida',
+          `<p>La visita de <strong>${esc(lead.nombre)}</strong> del <strong>${esc(cuando)}</strong> es en:</p>
+           <p style="font-size:18px">🏠 <strong>${esc(lead.propiedad)}</strong></p>
+           <p>El evento de tu calendario se actualizó con la dirección correcta.</p>
+           <p>${boton('Ver ficha', `${config.baseUrl}/admin/lead/${lead.id}`, '#111417')}</p>`
+        ),
+        icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: this.eventoEquipo(lead, visita) },
+      });
+      if (!avisarInteresado) return;
+      await mailer
+        .enviar({
+          to: lead.email,
+          subject: `Dirección de tu visita: ${lead.propiedad} – ${config.empresa.nombre}`,
+          html: correoHTML(
+            'Dirección de tu visita',
+            `<p>Hola ${esc(primerNombre(lead))},</p>
+             <p>Te confirmamos la dirección de la propiedad que visitarás el <strong>${esc(cuando)}</strong>:</p>
+             <p style="font-size:18px">🏠 <strong>${esc(lead.propiedad)}</strong></p>`
+          ),
+          icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: this.eventoInteresado(lead, visita) },
+        })
+        .catch((e) => console.error('[correo] dirección corregida al interesado falló:', e.message));
+    },
+
     async visitaCancelada(lead, visita) {
       const cuando = describirBloque(visita.fecha, visita.hora);
       const link = linkAgenda(lead);
@@ -274,6 +305,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         `📞 Teléfono: ${tel}`,
         lead.telefono ? `💬 WhatsApp: https://wa.me/${lead.telefono}` : null,
         lead.email ? `✉️ Correo: ${lead.email}` : null,
+        lead.direccion_actual ? `🏡 Vive en (dirección actual del interesado): ${[lead.direccion_actual, lead.comuna].filter(Boolean).join(', ')}` : null,
         lead.tipo ? `💼 ${REQUISITOS[lead.tipo]?.etiqueta || lead.tipo}${lead.razon_social ? ` · ${lead.razon_social}` : ''}` : null,
         lead.complementa
           ? `👥 ${lead.comp_rol === 'aval' ? 'Aval' : 'Complementa renta'}: ${lead.comp_nombre || ''}${lead.comp_telefono ? ` +${lead.comp_telefono}` : ''}${lead.comp_relacion ? ` (${lead.comp_relacion})` : ''}`

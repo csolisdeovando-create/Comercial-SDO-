@@ -253,6 +253,12 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       errores.push(...titular.errores);
       const plazoCambio = PLAZOS_CAMBIO[b.plazo_cambio] ? b.plazo_cambio : null;
       if (!plazoCambio) errores.push('Indica para cuándo te quieres cambiar.');
+      const soloLetras = (t) => sinTildes(t).replace(/[^a-z0-9]/g, '');
+      const dirPropiedad = soloLetras(b.propiedad);
+      const dirActual = soloLetras(b.direccion_actual);
+      if (dirPropiedad.length >= 6 && dirActual.length >= 6 && (dirPropiedad.includes(dirActual) || dirActual.includes(dirPropiedad))) {
+        errores.push('En "Dirección de la propiedad" va la dirección de la propiedad que quieres arrendar (la del aviso), no tu dirección actual.');
+      }
       if (b.rut_empresa && !rutValido(b.rut_empresa)) errores.push('El RUT de la empresa no es válido.');
       const telefono = titular.telefono;
       if (!b.consentimiento) errores.push('Debes autorizar el uso de tus datos para evaluar la postulación.');
@@ -930,6 +936,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     reagendada_aviso: 'Visita reagendada. Se avisó al equipo y al interesado con la nueva hora.',
     bloque_ocupado: 'Ese horario ya está ocupado o bloqueado. Elige otro.',
     bloque_invalido: 'Selecciona un horario válido.',
+    propiedad: 'Dirección de la propiedad guardada.',
+    propiedad_evento: 'Dirección de la propiedad guardada. Se actualizó el evento de la visita en el calendario del equipo.',
   };
   const RESULTADOS = { realizada: 'visitado', no_asistio: 'no_asistio', no_continua: 'no_continua' };
 
@@ -972,6 +980,23 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       .visitaAgendada(lead, r.visita, { anterior: r.anterior, porEquipo: true, avisarInteresado: avisar })
       .catch((e) => console.error('[panel] agendar visita:', e));
     res.redirect(303, `/admin/lead/${lead.id}?ok=${r.anterior ? 'reagendada' : 'agendada'}${avisar ? '_aviso' : ''}#visita`);
+  });
+
+  // Corregir la dirección de la propiedad a visitar (se actualiza el evento del calendario del equipo)
+  app.post('/admin/lead/:id/propiedad', formAdmin, async (req, res) => {
+    let lead = leadAdmin(req, res);
+    if (!lead) return;
+    const propiedad = String(req.body?.propiedad || '').trim().slice(0, 300);
+    if (!propiedad || propiedad === lead.propiedad) return res.redirect(303, `/admin/lead/${lead.id}`);
+    lead = db.actualizarLead(lead.id, { propiedad });
+    const visita = db.visitaVigente(lead.id);
+    const avisarEvento = visita && !visita.resultado && visita.fecha >= hoyChile();
+    if (avisarEvento) {
+      await notif
+        .propiedadCorregida(lead, visita, { avisarInteresado: Boolean(req.body?.avisar) && Boolean(lead.email) })
+        .catch((e) => console.error('[panel] corregir propiedad:', e));
+    }
+    res.redirect(303, `/admin/lead/${lead.id}?ok=${avisarEvento ? 'propiedad_evento' : 'propiedad'}`);
   });
 
   // Bloquear horarios en que el equipo no puede (compromisos fuera del sistema)

@@ -323,3 +323,8 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 .dia-lista li > div .visita { flex: 1 1 100%; }
 .cal-panel .boton-agregar .txt { display: none; }
 .dia-lista .boton-agregar { padding: 6px 10px; }
+
+.editar-propiedad { margin: 10px 0 4px; border: 1px dashed var(--borde); border-radius: 8px; padding: 8px 12px; }
+.editar-propiedad summary { cursor: pointer; font-weight: 600; color: var(--azul); font-size: 14px; }
+.editar-propiedad form { margin-top: 10px; display: grid; gap: 8px; }
+.editar-propiedad .boton { justify-self: start; }
