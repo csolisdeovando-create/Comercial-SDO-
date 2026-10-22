@@ -12,6 +12,8 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
   const linkPostular = (lead) => `${config.baseUrl}/postular/${lead.token}`;
   const linkAgenda = (lead) => `${config.baseUrl}/agendar/${lead.token}`;
   const firmaRevision = (id) => firmar(config.secret, 'revision', id);
+  const firmaResultado = (visitaId) => firmar(config.secret, 'resultado', visitaId);
+  const linkCancelar = (lead) => `${config.baseUrl}/visita/${lead.token}/cancelar`;
   // Todas las visitas (también los sábados) le llegan al mismo equipo
   const destinatarios = () => config.correo.visitas;
   const primerNombre = (lead) => (lead.nombre || '').trim().split(/\s+/)[0] || '';
@@ -71,6 +73,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     linkPostular,
     linkAgenda,
     firmaRevision,
+    firmaResultado,
 
     textoBienvenida(lead) {
       const saludo = lead.nombre ? `¡Hola ${primerNombre(lead)}! 👋` : '¡Hola! 👋';
@@ -169,16 +172,20 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     },
 
     // 2) Aprobación -> calendario al interesado
-    async enviarAgenda(lead, { soloCorreo = false } = {}) {
+    async enviarAgenda(lead, { soloCorreo = false, recordatorio = false } = {}) {
       const link = linkAgenda(lead);
       await mailer
         .enviar({
           to: lead.email,
-          subject: `Agenda tu visita – ${config.empresa.nombre}`,
+          subject: `${recordatorio ? 'Recordatorio: aún puedes agendar tu visita' : 'Agenda tu visita'} – ${config.empresa.nombre}`,
           html: correoHTML(
-            'Agenda tu visita',
+            recordatorio ? 'Agenda tu visita' : 'Agenda tu visita',
             `<p>Hola ${esc(primerNombre(lead))},</p>
-             <p>¡Buenas noticias! Revisamos tus documentos y ya puedes agendar la visita${lead.propiedad ? ` a <strong>${esc(lead.propiedad)}</strong>` : ''}.</p>
+             <p>${
+               recordatorio
+                 ? 'Te recordamos que tus documentos ya están aprobados, pero aún no eliges tu horario de visita'
+                 : '¡Buenas noticias! Revisamos tus documentos y ya puedes agendar la visita'
+             }${lead.propiedad ? ` a <strong>${esc(lead.propiedad)}</strong>` : ''}.</p>
              <p>Elige el día y la hora que te acomoden (${textoDias(config.agenda)}, ${config.agenda.horas.map((h) => `${h}:00`).join(' · ')} hrs):</p>
              ${boton('📅 Elegir horario de visita', link)}`
           ),
@@ -188,7 +195,9 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       if (soloCorreo) return;
       await enviarWhatsappSeguro(
         lead,
-        `Hola ${primerNombre(lead)} 😊 Revisamos tus documentos y ya puedes agendar tu visita. Elige día y hora aquí 📅\n${link}`,
+        recordatorio
+          ? `Hola ${primerNombre(lead)} 😊 Te recordamos que tus documentos ya están aprobados. Elige día y hora para tu visita aquí 📅\n${link}`
+          : `Hola ${primerNombre(lead)} 😊 Revisamos tus documentos y ya puedes agendar tu visita. Elige día y hora aquí 📅\n${link}`,
         [primerNombre(lead) || 'cliente', link]
       );
     },
@@ -224,12 +233,13 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
            <p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
            ${lead.propiedad ? `<p>🏠 ${esc(lead.propiedad)}</p>` : ''}
            <p>Por favor confírmanos tu asistencia, o elige otro horario si no puedes asistir:</p>
-           ${boton('✅ Confirmar asistencia', confirmar)} ${boton('📅 Reagendar', link, '#111417')}`
+           ${boton('✅ Confirmar asistencia', confirmar)} ${boton('📅 Reagendar', link, '#111417')}
+           <p style="font-size:13px;color:#5a6478">¿Ya no puedes ir? <a href="${esc(linkCancelar(lead))}">Cancelar la visita</a></p>`
         ),
       });
       await enviarWhatsappSeguro(
         lead,
-        `Hola ${primerNombre(lead)} 👋 Te recordamos tu visita de mañana: *${cuando}*.\n✅ Confirma tu asistencia: ${confirmar}\n📅 Si no puedes, reagenda aquí: ${link}`
+        `Hola ${primerNombre(lead)} 👋 Te recordamos tu visita de mañana: *${cuando}*.\n✅ Confirma tu asistencia: ${confirmar}\n📅 Si no puedes, reagenda aquí: ${link}\n❌ Para cancelarla: ${linkCancelar(lead)}`
       );
     },
 
@@ -391,7 +401,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
              <p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
              ${lead.propiedad ? `<p>🏠 ${esc(lead.propiedad)}</p>` : ''}
              <p>El día anterior te enviaremos un recordatorio para confirmar tu asistencia. Si este horario no te acomoda, puedes elegir otro:</p>
-             ${boton('Cambiar horario', linkAgenda(lead), '#111417')}`
+             ${boton('📅 Cambiar horario', linkAgenda(lead), '#111417')} ${boton('❌ Cancelar visita', linkCancelar(lead), '#8c2a20')}`
           ),
           icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: this.eventoInteresado(lead, visita) },
         })
@@ -422,6 +432,69 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     },
 
     // Quita la visita del calendario del equipo
+    // El interesado canceló desde su link: se quita el evento al equipo y se le confirma a él
+    async cancelacionInteresado(lead, visita, motivo) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      await this.eventoCancelado(lead, visita, `El interesado canceló la visita${motivo ? `: “${motivo}”` : ' (sin indicar motivo)'}.`);
+      await mailer
+        .enviar({
+          to: lead.email,
+          subject: `Cancelaste tu visita del ${cuando} – ${config.empresa.nombre}`,
+          html: correoHTML(
+            'Visita cancelada',
+            `<p>Hola ${esc(primerNombre(lead))},</p><p>Cancelamos tu visita del <strong>${esc(cuando)}</strong>, como pediste.</p>
+             <p>Si más adelante quieres visitar la propiedad, puedes elegir un nuevo horario aquí:</p>${boton('📅 Elegir nuevo horario', linkAgenda(lead))}`
+          ),
+          icalEvent: { method: 'CANCEL', filename: 'visita.ics', content: this.eventoInteresado(lead, visita, { metodo: 'CANCEL' }) },
+        })
+        .catch((e) => console.error('[correo] confirmación de cancelación falló:', e.message));
+    },
+
+    // Terminó la visita: se le pide al equipo el resultado con botones de un toque
+    async pedirResultado(lead, visita) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      const link = (r) => `${config.baseUrl}/resultado/${visita.id}?r=${r}&firma=${firmaResultado(visita.id)}`;
+      await mailer.enviar({
+        to: destinatarios(visita.fecha),
+        subject: `📝 ¿Cómo fue la visita? ${lead.nombre} · ${lead.propiedad || ''} · ${cuando}`,
+        html: correoHTML(
+          '¿Cómo fue la visita?',
+          `<p>Terminó la visita de <strong>${esc(lead.nombre)}</strong> del <strong>${esc(cuando)}</strong>${lead.propiedad ? ` en ${esc(lead.propiedad)}` : ''}.</p>
+           <p>Registra el resultado con un toque (después puedes agregar notas):</p>
+           <p>${boton('✅ Visitó y continúa', link('realizada'))} ${boton('⚠️ No asistió', link('no_asistio'), '#b7791f')} ${boton('❌ No continúa', link('no_continua'), '#8c2a20')}</p>
+           ${tablaLead(lead)}`
+        ),
+      });
+    },
+
+    // Mensaje al interesado según el resultado de la visita
+    async seguimientoVisita(lead, visita, resultado) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      const nombre = esc(primerNombre(lead));
+      const contenido = {
+        realizada: {
+          asunto: 'Gracias por visitar la propiedad',
+          html: `<p>Hola ${nombre},</p><p>¡Gracias por visitar${lead.propiedad ? ` <strong>${esc(lead.propiedad)}</strong>` : ' la propiedad'}! Nuestro equipo te contactará con los próximos pasos para la reserva y el contrato.</p><p>Si tienes cualquier duda, respóndenos este correo o escríbenos por WhatsApp al ${esc(config.empresa.whatsappComercial)}.</p>`,
+          wa: `Hola ${primerNombre(lead)} 😊 ¡Gracias por visitar la propiedad! Te contactaremos con los próximos pasos para la reserva.`,
+        },
+        no_asistio: {
+          asunto: 'No pudimos verte en la visita',
+          html: `<p>Hola ${nombre},</p><p>Te esperamos en la visita del <strong>${esc(cuando)}</strong>, pero no pudimos encontrarnos. Si todavía te interesa la propiedad, elige un nuevo horario:</p>${boton('📅 Reagendar visita', linkAgenda(lead))}`,
+          wa: `Hola ${primerNombre(lead)}, te esperamos en la visita del *${cuando}* y no pudimos encontrarnos. Si aún te interesa, reagenda aquí: ${linkAgenda(lead)}`,
+        },
+        no_continua: {
+          asunto: 'Gracias por tu visita',
+          html: `<p>Hola ${nombre},</p><p>Gracias por visitar la propiedad. Si buscas otras opciones de arriendo, escríbenos por WhatsApp al ${esc(config.empresa.whatsappComercial)} y te ayudamos.</p>`,
+          wa: `Hola ${primerNombre(lead)}, gracias por tu visita. Si buscas otras opciones de arriendo, escríbenos y te ayudamos 🙌`,
+        },
+      }[resultado];
+      if (!contenido) return;
+      await mailer
+        .enviar({ to: lead.email, subject: `${contenido.asunto} – ${config.empresa.nombre}`, html: correoHTML(contenido.asunto, contenido.html) })
+        .catch((e) => console.error('[correo] seguimiento de visita falló:', e.message));
+      await enviarWhatsappSeguro(lead, contenido.wa);
+    },
+
     async eventoCancelado(lead, visita, motivo) {
       const cuando = describirBloque(visita.fecha, visita.hora);
       await mailer.enviar({

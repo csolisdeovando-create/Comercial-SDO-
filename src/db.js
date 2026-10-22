@@ -98,11 +98,18 @@ function migrar(db) {
   if (!visitas.includes('recordatorio_at')) db.exec('ALTER TABLE visitas ADD COLUMN recordatorio_at TEXT');
   // 'equipo' = ingresada a mano desde el panel (agendada por teléfono u otro medio)
   if (!visitas.includes('origen')) db.exec('ALTER TABLE visitas ADD COLUMN origen TEXT');
+  // Post-visita: cuándo se le pidió el resultado al equipo, y quién canceló (equipo o interesado)
+  if (!visitas.includes('resultado_pedido_at')) db.exec('ALTER TABLE visitas ADD COLUMN resultado_pedido_at TEXT');
+  if (!visitas.includes('cancelada_por')) db.exec('ALTER TABLE visitas ADD COLUMN cancelada_por TEXT');
+  if (!visitas.includes('motivo_cancelacion')) db.exec('ALTER TABLE visitas ADD COLUMN motivo_cancelacion TEXT');
   const leads = columnas('leads');
   if (!leads.includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
   if (!leads.includes('plazo_cambio')) db.exec('ALTER TABLE leads ADD COLUMN plazo_cambio TEXT');
   // Valor mensual del arriendo (lo ingresa el equipo): base del requisito de renta de 2,5 veces
   if (!leads.includes('valor_arriendo')) db.exec('ALTER TABLE leads ADD COLUMN valor_arriendo INTEGER');
+  // Recordatorios del equipo para que agende (aprobados que aún no eligen horario)
+  if (!leads.includes('aviso_agenda_at')) db.exec('ALTER TABLE leads ADD COLUMN aviso_agenda_at TEXT');
+  if (!leads.includes('avisos_agenda')) db.exec('ALTER TABLE leads ADD COLUMN avisos_agenda INTEGER DEFAULT 0');
   // Persona que complementa renta o es aval, y datos personales completos de ambos
   const personales = ['doc_tipo', 'nacionalidad', 'fecha_nacimiento', 'estado_civil', 'profesion', 'direccion_actual', 'comuna'];
   for (const col of [
@@ -288,7 +295,20 @@ function crearRepositorio(db) {
       db.prepare(`UPDATE visitas SET confirmada_at = datetime('now') WHERE id = ? AND confirmada_at IS NULL`).run(visitaId),
     marcarRecordatorio: (visitaId) =>
       db.prepare(`UPDATE visitas SET recordatorio_at = datetime('now') WHERE id = ?`).run(visitaId),
-    cancelarVisita: (visitaId) => db.prepare(`UPDATE visitas SET estado = 'cancelada' WHERE id = ?`).run(visitaId),
+    cancelarVisita: (visitaId, { por = 'equipo', motivo = null } = {}) =>
+      db.prepare(`UPDATE visitas SET estado = 'cancelada', cancelada_por = ?, motivo_cancelacion = ? WHERE id = ?`).run(por, motivo, visitaId),
+    // Visitas que ya ocurrieron (hasta `fecha` incluida) y aún no tienen resultado
+    visitasSinResultado: (hastaFecha, desdeFecha = '0000-00-00') =>
+      db
+        .prepare(
+          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.portal FROM visitas v JOIN leads l ON l.id = v.lead_id
+           WHERE v.estado = 'confirmada' AND v.resultado IS NULL AND v.fecha BETWEEN ? AND ? ORDER BY v.fecha DESC, v.hora DESC`
+        )
+        .all(desdeFecha, hastaFecha),
+    marcarResultadoPedido: (visitaId) => db.prepare(`UPDATE visitas SET resultado_pedido_at = datetime('now') WHERE id = ?`).run(visitaId),
+    visitaPorId: (id) => db.prepare('SELECT * FROM visitas WHERE id = ?').get(id),
+    marcarAvisoAgenda: (leadId) =>
+      db.prepare(`UPDATE leads SET aviso_agenda_at = datetime('now'), avisos_agenda = COALESCE(avisos_agenda, 0) + 1 WHERE id = ?`).run(leadId),
 
     // Elimina al interesado con todo su historial; devuelve las rutas de sus archivos para borrarlos del disco
     eliminarLead(leadId) {

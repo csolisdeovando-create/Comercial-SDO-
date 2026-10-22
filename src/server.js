@@ -16,11 +16,15 @@ if (mailer.modoPrueba) console.warn('⚠️  SMTP no configurado: los correos se
 if (!whatsapp.configurado) console.warn('⚠️  WhatsApp no configurado: los mensajes solo se muestran en consola y el webhook está desactivado.');
 else if (!config.whatsapp.appSecret) console.warn('⚠️  Define WHATSAPP_APP_SECRET: sin él no se verifica que los mensajes vengan de Meta.');
 
-// Revisa cada 15 minutos si hay recordatorios de visita por enviar
+// Cada 15 minutos: recordatorios del día anterior y pedido de resultado de las visitas que ya terminaron
 const revisarRecordatorios = () =>
   app.locals.enviarRecordatorios().then((n) => n && console.log(`[recordatorio] ${n} enviado(s)`)).catch((e) => console.error('[recordatorio]', e));
+const pedirResultados = () =>
+  app.locals.pedirResultados().then((n) => n && console.log(`[resultado] ${n} pedido(s)`)).catch((e) => console.error('[resultado]', e));
 setTimeout(revisarRecordatorios, 60 * 1000);
 setInterval(revisarRecordatorios, 15 * 60 * 1000);
+setTimeout(pedirResultados, 90 * 1000);
+setInterval(pedirResultados, 15 * 60 * 1000);
 
 app.listen(config.port, () => {
   console.log(`SDO Comercial escuchando en ${config.baseUrl} (puerto ${config.port})`);

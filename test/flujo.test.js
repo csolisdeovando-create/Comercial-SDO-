@@ -1138,3 +1138,112 @@ test('lector: arma la consulta a Claude con PDF e imágenes y salida en JSON', a
   assert.deepStrictEqual(pedido.messages[0].content.map((b) => b.type), ['document', 'image', 'text']);
   assert.strictEqual(crearLector({}).activo, false);
 });
+
+test('esperando agenda: el equipo le recuerda agendar (uno o todos, sin repetir en 24 horas)', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const post = (ruta) => fetch(ctx.url + ruta, { method: 'POST', headers: h, redirect: 'manual' });
+  const ana = ctx.db.crearLead({ telefono: '56900000001', nombre: 'Ana Muñoz', email: 'ana@example.com', estado: 'aprobado' });
+  ctx.db.crearLead({ telefono: '56900000002', nombre: 'Luis Rojas', email: 'luis@example.com', estado: 'aprobado' });
+
+  let panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.match(panel, /Esperando agenda<\/h1>/);
+  assert.match(panel, /Recordar a todos que agenden/);
+  let ficha = await (await fetch(`${ctx.url}/admin/lead/${ana.id}`, { headers: h })).text();
+  assert.match(ficha, /Recordarle que agende/);
+
+  let r = await post(`/admin/lead/${ana.id}/recordar-agenda`);
+  assert.match(r.headers.get('location'), /ok=recordado/);
+  const correo = ctx.correos.find((c) => c.to === 'ana@example.com');
+  assert.match(correo.subject, /Recordatorio: aún puedes agendar tu visita/);
+  assert.match(correo.html, new RegExp(`/agendar/${ana.token}`));
+  assert.strictEqual(ctx.db.leadPorId(ana.id).avisos_agenda, 1);
+
+  // A todos: Ana ya fue recordada hoy, solo se le envía a Luis
+  r = await post('/admin/recordar-agenda');
+  assert.match(r.headers.get('location'), /recordados=1/);
+  assert.strictEqual(ctx.correos.filter((c) => /Recordatorio: aún puedes agendar/.test(c.subject)).length, 2);
+  panel = await (await fetch(`${ctx.url}${r.headers.get('location')}`, { headers: h })).text();
+  assert.match(panel, /Se envió el recordatorio para agendar a 1 interesado/);
+  assert.match((await post('/admin/recordar-agenda')).headers.get('location'), /recordados=0/);
+});
+
+test('el interesado puede reprogramar o cancelar la visita que le agendó el equipo', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const lead = ctx.db.crearLead({ telefono: '56987654321', nombre: 'Ana Rojas', email: 'ana@example.com', propiedad: 'Rosario Sur 91', estado: 'aprobado' });
+  await fetch(`${ctx.url}/admin/lead/${lead.id}/visita/agendar`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ bloque: '2026-10-16|11', avisar: '1' }) });
+  const aviso = ctx.correos.find((c) => c.to === 'ana@example.com');
+  assert.match(aviso.html, new RegExp(`/agendar/${lead.token}`), 'link para cambiar horario');
+  assert.match(aviso.html, new RegExp(`/visita/${lead.token}/cancelar`), 'link para cancelar');
+
+  let pagina = await (await fetch(`${ctx.url}/visita/${lead.token}/cancelar`)).text();
+  assert.match(pagina, /¿Cancelar tu visita\?/);
+  assert.match(pagina, /Prefiero cambiar el horario/);
+  const antes = ctx.correos.length;
+  const r = await fetch(`${ctx.url}/visita/${lead.token}/cancelar`, { method: 'POST', body: new URLSearchParams({ motivo: 'Encontré otra propiedad' }) });
+  assert.match(await r.text(), /cancelamos tu visita y avisamos al equipo/);
+  const visita = ctx.db.ultimaVisita(lead.id);
+  assert.deepStrictEqual([visita.estado, visita.cancelada_por, visita.motivo_cancelacion], ['cancelada', 'interesado', 'Encontré otra propiedad']);
+  assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'aprobado');
+  const nuevos = ctx.correos.slice(antes);
+  const equipo = nuevos.find((c) => /Visita CANCELADA/.test(c.subject));
+  assert.ok(equipo.to.includes('julio.mendoza@sdorent.cl'));
+  assert.match(equipo.html, /El interesado canceló la visita: “Encontré otra propiedad”/);
+  assert.strictEqual(equipo.icalEvent.method, 'CANCEL');
+  assert.ok(nuevos.some((c) => c.to === 'ana@example.com' && /Cancelaste tu visita/.test(c.subject)));
+  // El horario queda libre y el interesado puede volver a agendar
+  assert.match(await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text(), /value="2026-10-16\|11"/);
+  const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /cancelada por el interesado/);
+  assert.match(ficha, /Motivo: “Encontré otra propiedad”/);
+  // Sin visita vigente, el link lleva a elegir horario
+  assert.match(await (await fetch(`${ctx.url}/visita/${lead.token}/cancelar`)).text(), /No tienes una visita agendada/);
+});
+
+test('post-visita: al terminar se pide el resultado al equipo y se avisa al interesado', async (t) => {
+  let ahora = new Date('2026-10-15T13:00:00Z'); // jueves 10:00 Chile
+  const ctx = await preparar({}, { ahoraFn: () => ahora });
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const lead = ctx.db.crearLead({ telefono: '56987654321', nombre: 'Ana Rojas', email: 'ana@example.com', propiedad: 'Rosario Sur 91', estado: 'agendado' });
+  const visita = ctx.db.crearVisita(lead.id, '2026-10-15', 9);
+
+  // 10:00: la visita de las 9 aún no termina (+30 min de margen)
+  assert.strictEqual(await ctx.app.locals.pedirResultados(), 0);
+  ahora = new Date('2026-10-15T13:45:00Z'); // 10:45
+  assert.strictEqual(await ctx.app.locals.pedirResultados(), 1);
+  assert.strictEqual(await ctx.app.locals.pedirResultados(), 0, 'se pide una sola vez');
+  const pedido = ctx.correos.find((c) => /¿Cómo fue la visita\?/.test(c.subject));
+  assert.ok(pedido.to.includes('julio.mendoza@sdorent.cl'));
+  const links = [...pedido.html.matchAll(/href="([^"]*\/resultado\/[^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
+  assert.strictEqual(links.length, 3);
+
+  let panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.match(panel, /Visitas por registrar resultado/);
+
+  // Link sin firma válida
+  assert.strictEqual((await fetch(`${ctx.url}/resultado/${visita.id}?r=realizada&firma=mala`)).status, 403);
+  // Un toque en "Visitó y continúa": abre la página con la opción marcada (no guarda solo con abrir el correo)
+  const url = new URL(links[0]);
+  const pagina = await (await fetch(`${ctx.url}${url.pathname}${url.search}`)).text();
+  assert.match(pagina, /value="realizada" checked/);
+  assert.strictEqual(ctx.db.visitaPorId(visita.id).resultado, null);
+  const r = await fetch(`${ctx.url}${url.pathname}`, { method: 'POST', body: new URLSearchParams({ firma: url.searchParams.get('firma'), resultado: 'realizada', notas: 'Le gustó', avisar: '1' }) });
+  assert.match(await r.text(), /Resultado guardado/);
+  assert.deepStrictEqual([ctx.db.visitaPorId(visita.id).resultado, ctx.db.visitaPorId(visita.id).notas], ['realizada', 'Le gustó']);
+  assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'visitado');
+  assert.ok(ctx.correos.some((c) => c.to === 'ana@example.com' && /Gracias por visitar/.test(c.subject)));
+  panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.doesNotMatch(panel, /Visitas por registrar resultado/);
+
+  // Desde el panel: "No asistió" con aviso manda el link para reagendar
+  const otro = ctx.db.crearLead({ telefono: '56911110000', nombre: 'Luis', email: 'luis@example.com', estado: 'agendado' });
+  ctx.db.crearVisita(otro.id, '2026-10-14', 15);
+  await fetch(`${ctx.url}/admin/lead/${otro.id}/visita`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ resultado: 'no_asistio', avisar: '1' }) });
+  const seguimiento = ctx.correos.find((c) => c.to === 'luis@example.com');
+  assert.match(seguimiento.subject, /No pudimos verte/);
+  assert.match(seguimiento.html, new RegExp(`/agendar/${otro.token}`));
+});

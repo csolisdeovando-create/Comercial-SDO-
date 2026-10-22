@@ -241,7 +241,7 @@ function calendario({ lead, cal, visita, error, config }) {
       <h1>Agenda tu visita</h1>
       <p class="lead">Hola ${esc((lead.nombre || '').split(' ')[0])}, elige el día y la hora que te acomoden. Las visitas son de ${esc(textoDias(config.agenda))}.</p>
       ${lead.propiedad ? `<p class="propiedad">🏠 ${esc(lead.propiedad)}</p>` : ''}
-      ${visita ? `<div class="alerta ok">Ya tienes una visita agendada para el <strong>${esc(describirBloque(visita.fecha, visita.hora))}</strong>. Si eliges otro horario, la reagendaremos.</div>` : ''}
+      ${visita ? `<div class="alerta ok">Ya tienes una visita agendada para el <strong>${esc(describirBloque(visita.fecha, visita.hora))}</strong>. Si eliges otro horario, la reagendaremos. <a href="/visita/${lead.token}/cancelar">Cancelar mi visita</a></div>` : ''}
       ${error ? `<div class="alerta error">${esc(error)}</div>` : ''}
       <form method="post" action="/agendar/${esc(lead.token)}" class="calendario">
         <div class="nav-semanas">
@@ -361,11 +361,15 @@ const RESULTADO_VISITA = {
   no_continua: '❌ No continúa',
 };
 
+// "21-10 18:05" en hora de Chile, desde fechas guardadas en UTC
+const fechaHora = (iso) =>
+  iso ? new Date(`${String(iso).replace(' ', 'T')}${/Z|[+-]\d\d:?\d\d$/.test(iso) ? '' : 'Z'}`).toLocaleString('es-CL', { timeZone: 'America/Santiago', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+
 const opcPanel = (config, nav) => ({ empresa: config.empresa.nombre, ancho: 'ancho', nav, pie: false });
 const linkWhatsapp = (tel) => (tel ? `<a href="https://wa.me/${esc(tel)}" target="_blank">+${esc(tel)}</a>` : '—');
 const bloqueDeVisita = (v) => describirBloque(...v.split(' ').map((x, i) => (i ? Number(x) : x)));
 
-function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) {
+function panel({ leads, todos, visitas, sinResultado = [], recordados = null, hoy, filtros = {}, eliminado, config }) {
   const conteo = (e) => todos.filter((l) => l.estado === e).length;
   const deHoy = visitas.filter((v) => v.fecha === hoy);
   const resumen = [
@@ -373,7 +377,9 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
     ['aprobado', 'Esperando agenda', conteo('aprobado')],
     ['agendado', 'Con visita agendada', conteo('agendado')],
     ['hoy', 'Visitas hoy', deHoy.length],
+    ['resultado', 'Por registrar resultado', sinResultado.length],
   ];
+  const esperando = todos.filter((l) => l.estado === 'aprobado' && l.email);
   const filtrando = Boolean(filtros.q || filtros.estado);
   const opcionesEstado = Object.entries(ETIQUETAS_ESTADO)
     .map(([k, t]) => `<option value="${k}" ${filtros.estado === k ? 'selected' : ''}>${esc(t)}</option>`)
@@ -388,7 +394,7 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
       ${resumen
         .map(
           ([e, t, n]) =>
-            `<a class="cifra ${e} ${filtros.estado === e ? 'activa' : ''}" href="${e === 'hoy' ? '#hoy' : `/admin?estado=${e}#interesados`}"><strong>${n}</strong><span>${t}</span></a>`
+            `<a class="cifra ${e} ${filtros.estado === e ? 'activa' : ''}" href="${e === 'hoy' ? '#hoy' : e === 'resultado' ? '#post-visita' : `/admin?estado=${e}#interesados`}"><strong>${n}</strong><span>${t}</span></a>`
         )
         .join('')}
     </section>
@@ -400,6 +406,36 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
         .map(
           (v) =>
             `<li><span class="cuando">${horaTexto(v.hora)} hrs</span> <a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a> · ${linkWhatsapp(v.telefono)}${v.propiedad ? ` · ${esc(v.propiedad)}` : ''}${v.resultado ? ` · <strong>${RESULTADO_VISITA[v.resultado]}</strong>` : ''}</li>`
+        )
+        .join('')}</ul>
+    </section>`
+        : ''
+    }
+    ${recordados !== null ? `<div class="alerta ok">📨 ${recordados ? `Se envió el recordatorio para agendar a ${recordados} interesado(s).` : 'No había interesados por recordar (a los que ya se les avisó en las últimas 24 horas no se les vuelve a enviar).'}</div>` : ''}
+    ${
+      sinResultado.length
+        ? `<section class="tarjeta destacada" id="post-visita">
+      <h1>📝 Visitas por registrar resultado</h1>
+      <p class="nota">Ya pasaron y no tienen resultado. Al terminar cada visita también llega un correo al equipo para registrarlo con un toque.</p>
+      <ul class="agenda-lista">${sinResultado
+        .map(
+          (v) =>
+            `<li><span class="cuando">${esc(describirBloque(v.fecha, v.hora))}</span> <a href="/admin/lead/${v.lead_id}#visita">${esc(v.nombre)}</a>${v.propiedad ? ` · ${esc(v.propiedad)}` : ''} · <a class="boton chico" href="/admin/lead/${v.lead_id}#visita">Registrar resultado</a></li>`
+        )
+        .join('')}</ul>
+    </section>`
+        : ''
+    }
+    ${
+      esperando.length && !filtrando
+        ? `<section class="tarjeta" id="esperando-agenda">
+      <div class="titulo-seccion"><div><h1>⏳ Esperando agenda</h1><span class="nota">${esperando.length} aprobado(s) que aún no eligen horario</span></div>
+        <form method="post" action="/admin/recordar-agenda"><button class="boton primario">📨 Recordar a todos que agenden</button></form></div>
+      <ul class="agenda-lista">${esperando
+        .slice(0, 20)
+        .map(
+          (l) =>
+            `<li><a href="/admin/lead/${l.id}#visita">${esc(l.nombre || 'Sin nombre')}</a> · ${linkWhatsapp(l.telefono)} · <span class="nota">${l.aviso_agenda_at ? `recordado ${l.avisos_agenda} vez(ces), último ${esc(fechaHora(l.aviso_agenda_at))}` : `aprobado ${esc(fechaHora(l.aprobado_at))}`}</span></li>`
         )
         .join('')}</ul>
     </section>`
@@ -665,6 +701,40 @@ function formPropiedad(lead, visita) {
     </details>`;
 }
 
+function formRecordarAgenda(lead) {
+  if (lead.estado !== 'aprobado' || !lead.email) return '';
+  return `<form method="post" action="/admin/lead/${lead.id}/recordar-agenda" class="form-recordar">
+      <button class="boton">📨 Recordarle que agende</button>
+      <span class="nota">${lead.aviso_agenda_at ? `Recordado ${lead.avisos_agenda} vez(ces) · último ${esc(fechaHora(lead.aviso_agenda_at))}` : 'Le llega un correo con el link para elegir horario.'}</span>
+    </form>`;
+}
+
+// Página del link del correo post-visita: el equipo registra el resultado sin iniciar sesión
+function resultadoVisita({ lead, visita, elegido, firma, error, config }) {
+  const opcion = (valor) =>
+    `<label class="opcion-resultado"><input type="radio" name="resultado" value="${valor}" ${elegido === valor ? 'checked' : ''} required><span>${RESULTADO_VISITA[valor]}</span></label>`;
+  return layout(
+    'Resultado de la visita',
+    `<section class="tarjeta angosta">
+      <h1>📝 ¿Cómo fue la visita?</h1>
+      <p><strong>${esc(lead.nombre || '')}</strong> · ${esc(describirBloque(visita.fecha, visita.hora))}${lead.propiedad ? `<br>🏠 ${esc(lead.propiedad)}` : ''}</p>
+      ${error ? `<div class="alerta error">${esc(error)}</div>` : ''}
+      ${visita.estado !== 'confirmada' ? '<div class="alerta error">Esta visita fue cancelada o reagendada.</div>' : ''}
+      ${visita.resultado ? `<div class="alerta ok">Ya registrado: ${RESULTADO_VISITA[visita.resultado]}. Puedes cambiarlo.</div>` : ''}
+      <form method="post" class="form-visita">
+        <input type="hidden" name="firma" value="${esc(firma)}">
+        <div class="opciones-resultado">${opcion('realizada')}${opcion('no_asistio')}${opcion('no_continua')}</div>
+        <label for="notas-visita">Notas (opcional)</label>
+        <textarea id="notas-visita" name="notas" rows="3" placeholder="Ej: le gustó, pide ver contrato; o: busca algo más grande.">${esc(visita.notas || '')}</textarea>
+        <label class="check"><input type="checkbox" name="avisar" value="1" ${visita.resultado ? '' : 'checked'}> Enviar mensaje al interesado según el resultado</label>
+        <button class="boton primario grande">Guardar resultado</button>
+      </form>
+      <p class="nota"><a href="/admin/lead/${lead.id}#visita">Ver ficha completa</a></p>
+    </section>`,
+    { empresa: config.empresa.nombre }
+  );
+}
+
 function seccionVisita(lead, visita, disponibles) {
   const puedeAgendarEquipo = ['aprobado', 'agendado', 'no_asistio'].includes(lead.estado);
   if (!visita) {
@@ -673,13 +743,14 @@ function seccionVisita(lead, visita, disponibles) {
         ['aprobado'].includes(lead.estado)
           ? 'Aprobado: esperando que el interesado elija un horario en el calendario. También puedes agendarla tú si la coordinaron por teléfono.'
           : 'Aún no tiene visita agendada. El calendario se envía al aprobar sus documentos.'
-      }</p>${puedeAgendarEquipo ? formAgendar(lead, disponibles, false) : ''}</section>`;
+      }</p>${formRecordarAgenda(lead)}${puedeAgendarEquipo ? formAgendar(lead, disponibles, false) : ''}</section>`;
   }
   const cuando = describirBloque(visita.fecha, visita.hora);
   if (visita.estado === 'cancelada') {
     return `<section class="tarjeta" id="visita"><h1>Visita</h1>
-      <p>La visita del <strong>${esc(cuando)}</strong> fue <strong>cancelada</strong>.${lead.estado === 'aprobado' ? ' El interesado puede elegir otro horario con su link.' : ''}</p>
-      ${puedeAgendarEquipo ? formAgendar(lead, disponibles, false) : ''}</section>`;
+      <p>La visita del <strong>${esc(cuando)}</strong> fue <strong>cancelada${visita.cancelada_por === 'interesado' ? ' por el interesado' : ''}</strong>.${lead.estado === 'aprobado' ? ' El interesado puede elegir otro horario con su link.' : ''}</p>
+      ${visita.motivo_cancelacion ? `<p class="nota">Motivo: “${esc(visita.motivo_cancelacion)}”</p>` : ''}
+      ${formRecordarAgenda(lead)}${puedeAgendarEquipo ? formAgendar(lead, disponibles, false) : ''}</section>`;
   }
   const opcion = (valor) =>
     `<label class="opcion-resultado"><input type="radio" name="resultado" value="${valor}" ${visita.resultado === valor ? 'checked' : ''} required><span>${RESULTADO_VISITA[valor]}</span></label>`;
@@ -697,6 +768,7 @@ function seccionVisita(lead, visita, disponibles) {
       </fieldset>
       <label for="notas-visita">Notas de la visita (opcional)</label>
       <textarea id="notas-visita" name="notas" rows="3" placeholder="Ej: le gustó, pide ver contrato; o: busca algo más grande.">${esc(visita.notas || '')}</textarea>
+      ${visita.resultado ? '' : `<label class="check"><input type="checkbox" name="avisar" value="1" checked> Enviar mensaje al interesado según el resultado <small class="nota">(continúa: próximos pasos · no asistió: link para reagendar · no continúa: agradecimiento)</small></label>`}
       <div class="acciones-ficha"><button class="boton primario">Guardar resultado</button></div>
     </form>
     ${
@@ -710,6 +782,7 @@ function seccionVisita(lead, visita, disponibles) {
       </form>
     </div>`
     }
+    ${visita.resultado === 'realizada' ? '<div class="alerta ok">✅ Continúa: siguiente paso, la reserva y el contrato (Bárbara).</div>' : ''}
     ${visita.resultado === 'no_continua' ? `<div class="alerta error">Este interesado no continúa. Si ya no necesitas sus datos, puedes <a href="/admin/lead/${lead.id}/eliminar">eliminarlo</a>.</div>` : ''}
   </section>`;
 }
@@ -951,4 +1024,4 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   );
 }
 
-module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, confirmarEliminar, ingresar };
+module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, resultadoVisita, confirmarEliminar, ingresar };

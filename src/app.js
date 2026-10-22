@@ -31,6 +31,16 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     promesa.finally(() => tareas.delete(promesa));
   };
 
+  // Resultado de la visita: estado del interesado y, si se pide, mensaje al interesado según el resultado
+  const RESULTADOS = { realizada: 'visitado', no_asistio: 'no_asistio', no_continua: 'no_continua' };
+  const RESULTADO_TEXTO = { realizada: '✅ Visitó y continúa', no_asistio: '⚠️ No asistió', no_continua: '❌ No continúa' };
+  async function registrarResultado(lead, visita, resultado, notas, avisar) {
+    const primeraVez = visita.resultado !== resultado;
+    db.registrarResultadoVisita(visita.id, resultado, String(notas || '').trim().slice(0, 2000));
+    db.actualizarLead(lead.id, { estado: RESULTADOS[resultado] });
+    if (avisar && primeraVez) await notif.seguimientoVisita(db.leadPorId(lead.id), visita, resultado).catch((e) => console.error('[resultado] seguimiento:', e));
+  }
+
   // Lectura automática de liquidaciones y certificado AFP (titular y quien complementa, si es dependiente)
   const lectorDocs = lector || crearLector({ apiKey: config.anthropicApiKey });
   async function revisarDocumentos(leadId) {
@@ -652,6 +662,113 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     res.redirect(303, `/visita/${lead.token}/confirmar`);
   });
 
+  // El interesado cancela su visita (desde el correo o el calendario): se libera el horario y se avisa al equipo
+  app.get('/visita/:token/cancelar', (req, res) => {
+    const lead = leadDesdeToken(req, res);
+    if (!lead) return;
+    const visita = db.visitaVigente(lead.id);
+    if (!visita) {
+      return res.send(
+        vistas.mensaje('No tienes una visita agendada', 'Tu visita ya fue cancelada o no está agendada. Si quieres visitar la propiedad, elige un horario:', {
+          ...opcVista,
+          icono: '📅',
+          extra: `<p><a class="boton primario" href="/agendar/${lead.token}">📅 Elegir horario</a></p>`,
+        })
+      );
+    }
+    const cuando = describirBloque(visita.fecha, visita.hora);
+    if (visita.fecha < hoyChile()) {
+      return res.send(vistas.mensaje('Esta visita ya pasó', `Tu visita era el <strong>${esc(cuando)}</strong>. Si quieres visitar de nuevo, escríbenos por WhatsApp.`, { ...opcVista, icono: '🗓️' }));
+    }
+    res.send(
+      vistas.mensaje('¿Cancelar tu visita?', `<strong>${esc(cuando)}</strong>${lead.propiedad ? `<br>🏠 ${esc(lead.propiedad)}` : ''}`, {
+        ...opcVista,
+        icono: '🗓️',
+        extra: `<p><a class="boton primario grande" href="/agendar/${lead.token}">📅 Prefiero cambiar el horario</a></p>
+          <form method="post" class="form-cancelar-visita">
+            <label>¿Por qué cancelas? <small class="nota">(opcional, nos ayuda a mejorar)</small><textarea name="motivo" rows="2" maxlength="300" placeholder="Ej: ya encontré otra propiedad"></textarea></label>
+            <button class="boton peligro grande">Sí, cancelar mi visita</button>
+          </form>`,
+      })
+    );
+  });
+
+  app.post('/visita/:token/cancelar', express.urlencoded({ extended: false }), async (req, res) => {
+    let lead = leadDesdeToken(req, res);
+    if (!lead) return;
+    const visita = db.visitaVigente(lead.id);
+    if (visita && visita.fecha < hoyChile()) return res.redirect(303, `/visita/${lead.token}/cancelar`);
+    if (visita) {
+      const motivo = String(req.body?.motivo || '').trim().slice(0, 300) || null;
+      db.cancelarVisita(visita.id, { por: 'interesado', motivo });
+      lead = db.actualizarLead(lead.id, { estado: 'aprobado' });
+      await notif.cancelacionInteresado(lead, visita, motivo).catch((e) => console.error('[cancelar] aviso:', e));
+    }
+    res.send(
+      vistas.mensaje('Visita cancelada', 'Listo, cancelamos tu visita y avisamos al equipo. Si cambias de opinión, puedes elegir un nuevo horario cuando quieras.', {
+        ...opcVista,
+        icono: '✅',
+        extra: `<p><a class="boton" href="/agendar/${lead.token}">📅 Elegir nuevo horario</a></p>`,
+      })
+    );
+  });
+
+  // Resultado de la visita desde el correo que llega al equipo al terminar (link firmado, sin iniciar sesión)
+  function visitaFirmada(req, res) {
+    const id = Number(req.params.visitaId);
+    const visita = Number.isInteger(id) ? db.visitaPorId(id) : null;
+    const firma = req.query.firma || req.body?.firma;
+    if (!visita || !firmaCorrecta(config.secret, firma, 'resultado', id)) {
+      res.status(403).send(vistas.mensaje('Link no válido', 'El link para registrar el resultado no es válido.', { ...opcVista, icono: '🔒' }));
+      return null;
+    }
+    return visita;
+  }
+
+  app.get('/resultado/:visitaId', (req, res) => {
+    const visita = visitaFirmada(req, res);
+    if (!visita) return;
+    const lead = db.leadPorId(visita.lead_id);
+    res.send(vistas.resultadoVisita({ lead, visita, elegido: RESULTADOS[req.query.r] ? req.query.r : visita.resultado, firma: req.query.firma, config }));
+  });
+
+  app.post('/resultado/:visitaId', express.urlencoded({ extended: false }), async (req, res) => {
+    const visita = visitaFirmada(req, res);
+    if (!visita) return;
+    const lead = db.leadPorId(visita.lead_id);
+    const resultado = String(req.body?.resultado || '');
+    if (!RESULTADOS[resultado] || visita.estado !== 'confirmada') {
+      return res.send(vistas.resultadoVisita({ lead, visita, elegido: null, firma: req.body?.firma, error: 'Elige un resultado.', config }));
+    }
+    await registrarResultado(lead, visita, resultado, req.body?.notas, Boolean(req.body?.avisar));
+    res.send(
+      vistas.mensaje('Resultado guardado', `${esc(RESULTADO_TEXTO[resultado])} · ${esc(lead.nombre || '')}`, {
+        ...opcVista,
+        icono: '📝',
+        extra: `<p><a class="boton primario" href="/admin/lead/${lead.id}#visita">Ver ficha</a> <a class="boton" href="/admin/calendario">Calendario</a></p>`,
+      })
+    );
+  });
+
+  // Al terminar cada visita se le pide el resultado al equipo (una vez por visita)
+  app.locals.pedirResultados = async () => {
+    const { fecha: hoy, minutos } = ahoraEnZona(config.zonaHoraria, ahora());
+    let enviados = 0;
+    for (const v of db.visitasSinResultado(hoy, sumarDias(hoy, -2))) {
+      const termino = v.hora * 60 + config.agenda.duracionMinutos + 30;
+      if (v.resultado_pedido_at || (v.fecha === hoy && minutos < termino)) continue;
+      const lead = db.leadPorId(v.lead_id);
+      try {
+        await notif.pedirResultado(lead, v);
+        db.marcarResultadoPedido(v.id);
+        enviados++;
+      } catch (e) {
+        console.error('[resultado] no se pudo pedir:', e.message);
+      }
+    }
+    return enviados;
+  };
+
   // ------------------------------------------------------------------
   // Panel interno (usuario/clave)
   // ------------------------------------------------------------------
@@ -766,7 +883,13 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
           (qRut.length >= 4 && (l.rut || '').includes(qRut))
       );
     }
-    res.send(vistas.panel({ leads: leads.slice(0, 300), todos, visitas: db.listarVisitas(hoyChile()), hoy: hoyChile(), filtros, eliminado, config }));
+    // Visitas que ya terminaron y no tienen resultado (últimos 30 días)
+    const { fecha: hoy, minutos } = ahoraEnZona(config.zonaHoraria, ahora());
+    const sinResultado = db
+      .visitasSinResultado(hoy, sumarDias(hoy, -30))
+      .filter((v) => v.fecha < hoy || v.hora * 60 + config.agenda.duracionMinutos <= minutos);
+    const recordados = req.query.recordados !== undefined ? Number(req.query.recordados) || 0 : null;
+    res.send(vistas.panel({ leads: leads.slice(0, 300), todos, visitas: db.listarVisitas(hoy), sinResultado, recordados, hoy, filtros, eliminado, config }));
   });
 
   // Planilla para Excel (separador ";" y BOM para que Excel en español abra bien los acentos)
@@ -994,6 +1117,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
 
   const AVISOS = {
     resultado: 'Resultado de la visita guardado.',
+    resultado_aviso: 'Resultado guardado y mensaje enviado al interesado.',
+    recordado: 'Le enviamos al interesado un recordatorio para que agende su visita.',
     cancelada: 'Visita cancelada. El horario quedó libre.',
     cancelada_aviso: 'Visita cancelada. Le enviamos al interesado el link para elegir otro horario.',
     agendada: 'Visita agendada. Se avisó al equipo y se agregó a su calendario.',
@@ -1009,17 +1134,16 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     propiedad_link: 'No se guardó: en la dirección va la calle y número, no el link del aviso.',
     propiedad_evento: 'Dirección de la propiedad guardada. Se actualizó el evento de la visita en el calendario del equipo.',
   };
-  const RESULTADOS = { realizada: 'visitado', no_asistio: 'no_asistio', no_continua: 'no_continua' };
 
-  app.post('/admin/lead/:id/visita', formAdmin, (req, res) => {
+  app.post('/admin/lead/:id/visita', formAdmin, async (req, res) => {
     const lead = leadAdmin(req, res);
     if (!lead) return;
     const resultado = String(req.body?.resultado || '');
     const visita = db.ultimaVisita(lead.id);
     if (!RESULTADOS[resultado] || !visita || visita.estado !== 'confirmada') return res.redirect(303, `/admin/lead/${lead.id}#visita`);
-    db.registrarResultadoVisita(visita.id, resultado, String(req.body?.notas || '').trim().slice(0, 2000));
-    db.actualizarLead(lead.id, { estado: RESULTADOS[resultado] });
-    res.redirect(303, `/admin/lead/${lead.id}?ok=resultado#visita`);
+    const avisar = Boolean(req.body?.avisar);
+    await registrarResultado(lead, visita, resultado, req.body?.notas, avisar);
+    res.redirect(303, `/admin/lead/${lead.id}?ok=${avisar ? 'resultado_aviso' : 'resultado'}#visita`);
   });
 
   app.post('/admin/lead/:id/visita/cancelar', formAdmin, async (req, res) => {
@@ -1050,6 +1174,26 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       .visitaAgendada(lead, r.visita, { anterior: r.anterior, porEquipo: true, avisarInteresado: avisar })
       .catch((e) => console.error('[panel] agendar visita:', e));
     res.redirect(303, `/admin/lead/${lead.id}?ok=${r.anterior ? 'reagendada' : 'agendada'}${avisar ? '_aviso' : ''}#visita`);
+  });
+
+  // Recordarle al interesado aprobado que elija su horario de visita
+  const esperaAgenda = (l) => l.estado === 'aprobado' && l.email && !db.visitaVigente(l.id);
+  app.post('/admin/lead/:id/recordar-agenda', formAdmin, async (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    if (!esperaAgenda(lead)) return res.redirect(303, `/admin/lead/${lead.id}#visita`);
+    await notif.enviarAgenda(lead, { recordatorio: true }).catch((e) => console.error('[panel] recordar agenda:', e));
+    db.marcarAvisoAgenda(lead.id);
+    res.redirect(303, `/admin/lead/${lead.id}?ok=recordado#visita`);
+  });
+  app.post('/admin/recordar-agenda', formAdmin, async (_req, res) => {
+    const hace24h = new Date(ahora().getTime() - 24 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+    const pendientes = db.listarLeads(100000).filter((l) => esperaAgenda(l) && (!l.aviso_agenda_at || l.aviso_agenda_at < hace24h));
+    for (const l of pendientes) {
+      await notif.enviarAgenda(l, { recordatorio: true }).catch((e) => console.error('[panel] recordar agenda:', e));
+      db.marcarAvisoAgenda(l.id);
+    }
+    res.redirect(303, `/admin?recordados=${pendientes.length}`);
   });
 
   // Valor del arriendo (base del requisito de renta) y volver a leer los documentos

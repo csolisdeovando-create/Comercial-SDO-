@@ -126,7 +126,7 @@ a { color: var(--verde-texto); }
 .titulo-seccion h1 { margin-bottom: 4px; }
 .tabla-scroll { overflow-x: auto; }
 .tabla a { font-weight: 600; }
-.resumen-estados { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+.resumen-estados { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 18px; }
 @media (max-width: 700px) { .resumen-estados { grid-template-columns: repeat(2, 1fr); } }
 .cifra { background: #fff; border-radius: var(--radio); padding: 14px 16px; box-shadow: 0 1px 3px rgba(17,20,23,.06); border-top: 4px solid var(--borde); }
 .cifra strong { display: block; font-size: 28px; line-height: 1.1; font-variant-numeric: tabular-nums; }
@@ -367,3 +367,7 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 .tag-renta { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 99px; white-space: nowrap; }
 .tag-renta.ok { background: var(--verde-claro); color: var(--verde-texto); }
 .tag-renta.mal { background: #fbeceb; color: #8c2a20; }
+.cifra.resultado { border-top-color: #8b5cf6; }
+.form-recordar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 8px 0 12px; }
+.form-cancelar-visita { display: grid; gap: 10px; margin-top: 14px; text-align: left; }
+.form-cancelar-visita textarea { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--borde); border-radius: 8px; }
