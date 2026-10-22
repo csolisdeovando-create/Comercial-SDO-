@@ -138,7 +138,7 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
     `<section class="tarjeta">
       <h1>Postula a la propiedad</h1>
       <p class="lead">Completa tus datos y sube tus documentos. Nuestro equipo los revisará y te enviaremos un calendario para que agendes tu visita.</p>
-      <p class="nota obligatorio">Todos los datos son obligatorios (solo los comentarios son opcionales): los necesitamos para preparar tu contrato.</p>
+      <p class="nota obligatorio">Todos los datos son obligatorios (solo los comentarios son opcionales): los necesitamos para preparar tu contrato en caso de reservar.<br>🔒 Tus datos no se divulgan: los usamos solo para evaluar tu postulación.</p>
       ${errores.length ? `<div class="alerta error"><strong>Revisa lo siguiente:</strong><ul>${errores.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>` : ''}
       <form method="post" action="/postular${lead?.token ? `/${esc(lead.token)}` : ''}" enctype="multipart/form-data" id="form-postulacion" novalidate>
         <fieldset>
@@ -725,7 +725,7 @@ function formularioDatos({ lead, valores: v, errores = [], config }) {
     `<section class="tarjeta">
       <h1>Completa tus datos</h1>
       <p class="lead">Hola ${esc(String(lead.nombre || '').split(' ')[0])}, para preparar tu contrato necesitamos todos tus datos. No tienes que volver a subir documentos.</p>
-      <p class="nota obligatorio">Todos los campos son obligatorios.</p>
+      <p class="nota obligatorio">Todos los datos son obligatorios: los necesitamos para preparar tu contrato en caso de reservar.<br>🔒 Tus datos no se divulgan: los usamos solo para evaluar tu postulación.</p>
       ${errores.length ? `<div class="alerta error"><strong>Revisa lo siguiente:</strong><ul>${errores.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>` : ''}
       <form method="post" action="/datos/${esc(lead.token)}" id="form-postulacion" novalidate>
         <fieldset><legend>Tus datos</legend>${formularioPersona(v, '')}</fieldset>
