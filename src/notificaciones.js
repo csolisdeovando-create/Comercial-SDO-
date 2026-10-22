@@ -8,6 +8,16 @@ const { describirBloque, generarICS, textoDias } = require('./agenda');
 // Número de versión creciente para que los calendarios reemplacen el evento anterior
 const secuenciaActual = () => Math.floor(Date.now() / 1000) - 1_700_000_000;
 
+// "Resultado de la Visita" con los valores de la lista de Breal
+const MOTIVOS_NO_CONTINUA = ['No cumple requerimiento', 'Precio muy alto', 'Ubicación inadecuada', 'Tamaño inadecuado', 'Desea ver otras propiedades'];
+function resultadoBreal(visita) {
+  if (visita?.resultado === 'realizada') return 'Cumple requerimiento';
+  if (visita?.resultado === 'no_asistio') return 'Interesado no asiste';
+  if (visita?.resultado === 'no_continua') return visita.motivo_resultado || 'No cumple requerimiento';
+  return null;
+}
+const TEXTO_RESULTADO = { realizada: '✅ Visitó y continúa', no_asistio: '⚠️ No asistió', no_continua: '❌ No continúa' };
+
 function crearNotificaciones({ config, mailer, whatsapp, db }) {
   const linkPostular = (lead) => `${config.baseUrl}/postular/${lead.token}`;
   const linkAgenda = (lead) => `${config.baseUrl}/agendar/${lead.token}`;
@@ -455,14 +465,37 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       const cuando = describirBloque(visita.fecha, visita.hora);
       const link = (r) => `${config.baseUrl}/resultado/${visita.id}?r=${r}&firma=${firmaResultado(visita.id)}`;
       await mailer.enviar({
-        to: destinatarios(visita.fecha),
+        to: config.correo.ejecutivoVisitas,
         subject: `📝 ¿Cómo fue la visita? ${lead.nombre} · ${lead.propiedad || ''} · ${cuando}`,
         html: correoHTML(
           '¿Cómo fue la visita?',
           `<p>Terminó la visita de <strong>${esc(lead.nombre)}</strong> del <strong>${esc(cuando)}</strong>${lead.propiedad ? ` en ${esc(lead.propiedad)}` : ''}.</p>
-           <p>Registra el resultado con un toque (después puedes agregar notas):</p>
+           <p>Registra el resultado con un toque (después puedes agregar notas). Tu respuesta le llega al equipo para dejarla registrada en Breal:</p>
            <p>${boton('✅ Visitó y continúa', link('realizada'))} ${boton('⚠️ No asistió', link('no_asistio'), '#b7791f')} ${boton('❌ No continúa', link('no_continua'), '#8c2a20')}</p>
            ${tablaLead(lead)}`
+        ),
+      });
+    },
+
+    // Quien visitó registró el resultado: el resto del equipo lo recibe listo para pasarlo a Breal
+    async resultadoRegistrado(lead, visita) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      const para = config.correo.visitas.filter((c) => !config.correo.ejecutivoVisitas.includes(c));
+      if (!para.length) return;
+      const fila = (k, v) => (v ? `<tr><td style="padding:6px 10px;color:#5a6478;width:190px">${k}</td><td style="padding:6px 10px"><strong>${esc(v)}</strong></td></tr>` : '');
+      await mailer.enviar({
+        to: para,
+        subject: `${TEXTO_RESULTADO[visita.resultado]}: ${lead.nombre} · ${lead.propiedad || ''} · ${cuando}`,
+        html: correoHTML(
+          'Resultado de la visita',
+          `<p style="font-size:18px">${TEXTO_RESULTADO[visita.resultado]}${visita.motivo_resultado ? ` · ${esc(visita.motivo_resultado)}` : ''}</p>
+           <p><strong>${esc(lead.nombre)}</strong> · ${esc(cuando)}${lead.propiedad ? ` · ${esc(lead.propiedad)}` : ''}</p>
+           ${visita.notas ? `<blockquote style="border-left:4px solid #00949a;margin:12px 0;padding:8px 14px;background:#f0fafa">${esc(visita.notas).replace(/\n/g, '<br>')}</blockquote>` : ''}
+           <p style="margin:16px 0 4px"><strong>Para registrar en Breal (Visita):</strong></p>
+           <table cellpadding="0" cellspacing="0" style="border:1px solid #e3e7ef;border-radius:8px;width:100%">
+             ${fila('Resultado de la Visita', resultadoBreal(visita))}${fila('Observaciones de la Visita', visita.notas)}
+           </table>
+           <p>${boton('Ver ficha', `${config.baseUrl}/admin/lead/${lead.id}#visita`, '#111417')}</p>`
         ),
       });
     },
@@ -511,4 +544,4 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
   };
 }
 
-module.exports = { crearNotificaciones };
+module.exports = { crearNotificaciones, MOTIVOS_NO_CONTINUA, resultadoBreal };

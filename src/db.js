@@ -104,6 +104,8 @@ function migrar(db) {
   if (!visitas.includes('motivo_cancelacion')) db.exec('ALTER TABLE visitas ADD COLUMN motivo_cancelacion TEXT');
   // Bárbara marca cuándo registró la visita en Breal (contacto, interesado, negocio potencial y visita)
   if (!visitas.includes('breal_at')) db.exec('ALTER TABLE visitas ADD COLUMN breal_at TEXT');
+  // Motivo cuando no continúa (mismos valores de "Resultado de la Visita" en Breal)
+  if (!visitas.includes('motivo_resultado')) db.exec('ALTER TABLE visitas ADD COLUMN motivo_resultado TEXT');
   const leads = columnas('leads');
   if (!leads.includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
   if (!leads.includes('plazo_cambio')) db.exec('ALTER TABLE leads ADD COLUMN plazo_cambio TEXT');
@@ -283,10 +285,10 @@ function crearRepositorio(db) {
 
     ultimaVisita: (leadId) =>
       db.prepare(`SELECT * FROM visitas WHERE lead_id = ? AND estado IN ('confirmada', 'cancelada') ORDER BY id DESC LIMIT 1`).get(leadId),
-    registrarResultadoVisita: (visitaId, resultado, notas) =>
+    registrarResultadoVisita: (visitaId, resultado, notas, motivo = null) =>
       db
-        .prepare(`UPDATE visitas SET resultado = ?, notas = ?, resultado_at = datetime('now') WHERE id = ?`)
-        .run(resultado, notas || null, visitaId),
+        .prepare(`UPDATE visitas SET resultado = ?, notas = ?, motivo_resultado = ?, resultado_at = datetime('now') WHERE id = ?`)
+        .run(resultado, notas || null, resultado === 'no_continua' ? motivo : null, visitaId),
     visitasParaRecordar: (fecha) =>
       db
         .prepare(

@@ -59,6 +59,8 @@ function cargarConfig(env = process.env) {
         env.EMAIL_VISITAS,
         'julio.mendoza@sdorent.cl,barbara.diaz@sdorent.cl,sdopropiedades@sdorent.cl,csolisdeovando@sdocapital.cl,josecano@sdorent.cl'
       ),
+      // Quien hace las visitas: a él se le pide el resultado; el resto del equipo recibe su respuesta
+      ejecutivoVisitas: lista(env.EMAIL_EJECUTIVO_VISITAS, 'julio.mendoza@sdorent.cl'),
       from: env.EMAIL_FROM || 'SDO Rent <sdopropiedades@sdorent.cl>',
       maxAdjuntosMB: Number(env.EMAIL_MAX_ADJUNTOS_MB || 20),
       smtp: {

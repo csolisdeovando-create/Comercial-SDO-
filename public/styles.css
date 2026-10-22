@@ -376,3 +376,4 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 .casilla-breal:hover { border-color: var(--azul); color: var(--azul); }
 .casilla-breal.hecha { background: var(--verde-claro); border-color: var(--verde); color: var(--verde-texto); font-weight: 700; }
 @media (min-width: 641px) { .casilla-breal span { display: none; } .casilla-breal { font-size: 18px; padding: 2px 10px; } }
+.motivo-resultado { display: block; margin: 10px 0; } .motivo-resultado select { display: block; margin-top: 4px; }

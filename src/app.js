@@ -12,6 +12,7 @@ const { crearNotificaciones } = require('./notificaciones');
 const { interpretarUrl, leerPublicacion, resumenPropiedad, pareceLink, faltaDireccion } = require('./publicacion');
 const { crearLector } = require('./lectura');
 const { validarCertificado } = require('./validacionAfp');
+const { MOTIVOS_NO_CONTINUA } = require('./notificaciones');
 const { validarPersona, CAMPOS_PERSONA, filasPersona, PLAZOS_CAMBIO } = require('./personas');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
@@ -34,11 +35,14 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   // Resultado de la visita: estado del interesado y, si se pide, mensaje al interesado según el resultado
   const RESULTADOS = { realizada: 'visitado', no_asistio: 'no_asistio', no_continua: 'no_continua' };
   const RESULTADO_TEXTO = { realizada: '✅ Visitó y continúa', no_asistio: '⚠️ No asistió', no_continua: '❌ No continúa' };
-  async function registrarResultado(lead, visita, resultado, notas, avisar) {
+  // `informarEquipo`: lo registró quien visitó (desde su correo) -> el resto del equipo recibe la respuesta para Breal
+  async function registrarResultado(lead, visita, resultado, notas, avisar, { motivo = null, informarEquipo = false } = {}) {
     const primeraVez = visita.resultado !== resultado;
-    db.registrarResultadoVisita(visita.id, resultado, String(notas || '').trim().slice(0, 2000));
-    db.actualizarLead(lead.id, { estado: RESULTADOS[resultado] });
-    if (avisar && primeraVez) await notif.seguimientoVisita(db.leadPorId(lead.id), visita, resultado).catch((e) => console.error('[resultado] seguimiento:', e));
+    db.registrarResultadoVisita(visita.id, resultado, String(notas || '').trim().slice(0, 2000), MOTIVOS_NO_CONTINUA.includes(motivo) ? motivo : null);
+    lead = db.actualizarLead(lead.id, { estado: RESULTADOS[resultado] });
+    const actualizada = db.visitaPorId(visita.id);
+    if (informarEquipo) await notif.resultadoRegistrado(lead, actualizada).catch((e) => console.error('[resultado] aviso al equipo:', e));
+    if (avisar && primeraVez) await notif.seguimientoVisita(lead, actualizada, resultado).catch((e) => console.error('[resultado] seguimiento:', e));
   }
 
   // Lectura automática de liquidaciones y certificado AFP (titular y quien complementa, si es dependiente)
@@ -740,7 +744,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     if (!RESULTADOS[resultado] || visita.estado !== 'confirmada') {
       return res.send(vistas.resultadoVisita({ lead, visita, elegido: null, firma: req.body?.firma, error: 'Elige un resultado.', config }));
     }
-    await registrarResultado(lead, visita, resultado, req.body?.notas, Boolean(req.body?.avisar));
+    await registrarResultado(lead, visita, resultado, req.body?.notas, Boolean(req.body?.avisar), { motivo: req.body?.motivo, informarEquipo: true });
     res.send(
       vistas.mensaje('Resultado guardado', `${esc(RESULTADO_TEXTO[resultado])} · ${esc(lead.nombre || '')}`, {
         ...opcVista,
@@ -1142,7 +1146,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     const visita = db.ultimaVisita(lead.id);
     if (!RESULTADOS[resultado] || !visita || visita.estado !== 'confirmada') return res.redirect(303, `/admin/lead/${lead.id}#visita`);
     const avisar = Boolean(req.body?.avisar);
-    await registrarResultado(lead, visita, resultado, req.body?.notas, avisar);
+    await registrarResultado(lead, visita, resultado, req.body?.notas, avisar, { motivo: req.body?.motivo });
     res.redirect(303, `/admin/lead/${lead.id}?ok=${avisar ? 'resultado_aviso' : 'resultado'}#visita`);
   });
 

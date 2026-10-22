@@ -1217,7 +1217,7 @@ test('post-visita: al terminar se pide el resultado al equipo y se avisa al inte
   assert.strictEqual(await ctx.app.locals.pedirResultados(), 1);
   assert.strictEqual(await ctx.app.locals.pedirResultados(), 0, 'se pide una sola vez');
   const pedido = ctx.correos.find((c) => /¿Cómo fue la visita\?/.test(c.subject));
-  assert.ok(pedido.to.includes('julio.mendoza@sdorent.cl'));
+  assert.deepStrictEqual(pedido.to, ['julio.mendoza@sdorent.cl'], 'solo a quien hizo la visita');
   const links = [...pedido.html.matchAll(/href="([^"]*\/resultado\/[^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
   assert.strictEqual(links.length, 3);
 
@@ -1236,13 +1236,22 @@ test('post-visita: al terminar se pide el resultado al equipo y se avisa al inte
   assert.deepStrictEqual([ctx.db.visitaPorId(visita.id).resultado, ctx.db.visitaPorId(visita.id).notas], ['realizada', 'Le gustó']);
   assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'visitado');
   assert.ok(ctx.correos.some((c) => c.to === 'ana@example.com' && /Gracias por visitar/.test(c.subject)));
+  // El resto del equipo recibe la respuesta de Julio, lista para Breal
+  const respuesta = ctx.correos.find((c) => /^✅ Visitó y continúa: Ana Rojas/.test(c.subject));
+  assert.ok(respuesta.to.includes('barbara.diaz@sdorent.cl'));
+  assert.ok(!respuesta.to.includes('julio.mendoza@sdorent.cl'));
+  assert.match(respuesta.html, /Para registrar en Breal/);
+  assert.match(respuesta.html, /Cumple requerimiento/);
+  assert.match(respuesta.html, /Le gustó/);
   panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
   assert.doesNotMatch(panel, /Visitas por registrar resultado/);
 
   // Desde el panel: "No asistió" con aviso manda el link para reagendar
   const otro = ctx.db.crearLead({ telefono: '56911110000', nombre: 'Luis', email: 'luis@example.com', estado: 'agendado' });
   ctx.db.crearVisita(otro.id, '2026-10-14', 15);
+  const antesPanel = ctx.correos.length;
   await fetch(`${ctx.url}/admin/lead/${otro.id}/visita`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ resultado: 'no_asistio', avisar: '1' }) });
+  assert.ok(!ctx.correos.slice(antesPanel).some((c) => /No asistió:/.test(c.subject)), 'desde el panel no se reenvía al equipo');
   const seguimiento = ctx.correos.find((c) => c.to === 'luis@example.com');
   assert.match(seguimiento.subject, /No pudimos verte/);
   assert.match(seguimiento.html, new RegExp(`/agendar/${otro.token}`));
@@ -1279,4 +1288,21 @@ test('próximas visitas: casilla "Registrado en Breal" que marca Bárbara', asyn
   // Se puede desmarcar
   await fetch(`${ctx.url}/admin/visita/${visita.id}/breal`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ registrada: '0' }) });
   assert.strictEqual(ctx.db.visitaPorId(visita.id).breal_at, null);
+});
+
+test('resultado "no continúa" con el motivo de Breal', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const lead = ctx.db.crearLead({ telefono: '56987654321', nombre: 'Ana Rojas', email: 'ana@example.com', estado: 'agendado' });
+  const v = ctx.db.crearVisita(lead.id, '2026-10-14', 11);
+  let ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /<option>Precio muy alto<\/option>/);
+  await fetch(`${ctx.url}/admin/lead/${lead.id}/visita`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ resultado: 'no_continua', motivo: 'Precio muy alto' }) });
+  assert.strictEqual(ctx.db.visitaPorId(v.id).motivo_resultado, 'Precio muy alto');
+  ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Para Breal · Resultado de la Visita: <strong>Precio muy alto<\/strong>/);
+  // Un motivo inventado no se guarda
+  await fetch(`${ctx.url}/admin/lead/${lead.id}/visita`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ resultado: 'no_continua', motivo: 'otra cosa' }) });
+  assert.strictEqual(ctx.db.visitaPorId(v.id).motivo_resultado, null);
 });

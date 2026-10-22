@@ -3,6 +3,7 @@ const { REQUISITOS, nombreRequisito } = require('./requisitos');
 const { formularioPersona, filasPersona, PLAZOS_CAMBIO } = require('./personas');
 const { faltaDireccion } = require('./publicacion');
 const { evaluarRenta, alertasAfp } = require('./evaluacionRenta');
+const { MOTIVOS_NO_CONTINUA, resultadoBreal } = require('./notificaciones');
 const { fechaLegible } = require('./personas');
 
 const PLAZO_CORTO = { '5_dias': '5 días', '15_dias': '15 días', '1_mes': '1 mes', mas_1_mes: '+1 mes' };
@@ -708,6 +709,10 @@ function formPropiedad(lead, visita) {
     </details>`;
 }
 
+// Motivo si no continúa (mismos valores que "Resultado de la Visita" en Breal)
+const selectMotivo = (visita) => `<label class="motivo-resultado">Si no continúa, ¿por qué? <small class="nota">(para Breal)</small>
+    <select name="motivo"><option value="">—</option>${MOTIVOS_NO_CONTINUA.map((m) => `<option${visita.motivo_resultado === m ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`;
+
 function formRecordarAgenda(lead) {
   if (lead.estado !== 'aprobado' || !lead.email) return '';
   return `<form method="post" action="/admin/lead/${lead.id}/recordar-agenda" class="form-recordar">
@@ -731,6 +736,7 @@ function resultadoVisita({ lead, visita, elegido, firma, error, config }) {
       <form method="post" class="form-visita">
         <input type="hidden" name="firma" value="${esc(firma)}">
         <div class="opciones-resultado">${opcion('realizada')}${opcion('no_asistio')}${opcion('no_continua')}</div>
+        ${selectMotivo(visita)}
         <label for="notas-visita">Notas (opcional)</label>
         <textarea id="notas-visita" name="notas" rows="3" placeholder="Ej: le gustó, pide ver contrato; o: busca algo más grande.">${esc(visita.notas || '')}</textarea>
         <label class="check"><input type="checkbox" name="avisar" value="1" ${visita.resultado ? '' : 'checked'}> Enviar mensaje al interesado según el resultado</label>
@@ -773,6 +779,7 @@ function seccionVisita(lead, visita, disponibles) {
         <legend>¿Cómo fue la visita?</legend>
         <div class="opciones-resultado">${opcion('realizada')}${opcion('no_asistio')}${opcion('no_continua')}</div>
       </fieldset>
+      ${selectMotivo(visita)}
       <label for="notas-visita">Notas de la visita (opcional)</label>
       <textarea id="notas-visita" name="notas" rows="3" placeholder="Ej: le gustó, pide ver contrato; o: busca algo más grande.">${esc(visita.notas || '')}</textarea>
       ${visita.resultado ? '' : `<label class="check"><input type="checkbox" name="avisar" value="1" checked> Enviar mensaje al interesado según el resultado <small class="nota">(continúa: próximos pasos · no asistió: link para reagendar · no continúa: agradecimiento)</small></label>`}
@@ -790,6 +797,7 @@ function seccionVisita(lead, visita, disponibles) {
     </div>`
     }
     ${visita.resultado === 'realizada' ? '<div class="alerta ok">✅ Continúa: siguiente paso, la reserva y el contrato (Bárbara).</div>' : ''}
+    ${visita.resultado ? `<p class="nota">Para Breal · Resultado de la Visita: <strong>${esc(resultadoBreal(visita))}</strong>${visita.resultado_at ? ` · registrado ${esc(fechaHora(visita.resultado_at))}` : ''}</p>` : ''}
     ${visita.resultado === 'no_continua' ? `<div class="alerta error">Este interesado no continúa. Si ya no necesitas sus datos, puedes <a href="/admin/lead/${lead.id}/eliminar">eliminarlo</a>.</div>` : ''}
   </section>`;
 }
