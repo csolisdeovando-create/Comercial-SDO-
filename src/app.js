@@ -436,7 +436,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         }
       }
       borrarTemporales(req); // archivos de campos que no correspondían al tipo elegido
-      programarRevision(lead.id); // lee liquidaciones y AFP sin hacer esperar al interesado
+      if (config.revisionAutomatica) programarRevision(lead.id); // lee liquidaciones y AFP sin hacer esperar al interesado
 
       try {
         await notif.documentosRecibidos(lead, documentos, { actualizacion });
@@ -1059,7 +1059,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         lead,
         documentos: db.documentosDeLead(lead.id),
         visita: db.ultimaVisita(lead.id),
-        revisionDocs: db.revisionDe(lead.id),
+        revisionDocs: config.revisionAutomatica ? db.revisionDe(lead.id) : false, // false = en pausa
         disponibles: calendarioDisponible(),
         firma: notif.firmaRevision(lead.id),
         aviso: AVISOS[req.query.ok] || null,
@@ -1174,6 +1174,13 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       .visitaAgendada(lead, r.visita, { anterior: r.anterior, porEquipo: true, avisarInteresado: avisar })
       .catch((e) => console.error('[panel] agendar visita:', e));
     res.redirect(303, `/admin/lead/${lead.id}?ok=${r.anterior ? 'reagendada' : 'agendada'}${avisar ? '_aviso' : ''}#visita`);
+  });
+
+  // Casilla "Registrado en Breal" de cada visita (Breal no está conectado: es solo un control del equipo)
+  app.post('/admin/visita/:id/breal', formAdmin, (req, res) => {
+    const visita = db.visitaPorId(Number(req.params.id));
+    if (visita) db.marcarBreal(visita.id, req.body?.registrada === '1');
+    res.redirect(303, `/admin${req.body?.volver === 'calendario' ? '/calendario' : ''}#proximas`);
   });
 
   // Recordarle al interesado aprobado que elija su horario de visita

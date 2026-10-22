@@ -24,6 +24,8 @@ function cargarConfig(env = process.env) {
     secret: env.APP_SECRET || 'cambia-esta-clave-secreta',
     // Lectura automática de liquidaciones y certificados AFP (Claude). Sin clave, la revisión queda manual.
     anthropicApiKey: env.ANTHROPIC_API_KEY || '',
+    // En pausa: true activa la lectura de liquidaciones/AFP y su sección en la ficha
+    revisionAutomatica: bool(env.REVISION_AUTOMATICA, false),
     dataDir,
     uploadsDir: path.join(dataDir, 'uploads'),
     zonaHoraria: env.ZONA_HORARIA || 'America/Santiago',

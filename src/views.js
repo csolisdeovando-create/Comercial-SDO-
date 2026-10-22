@@ -301,8 +301,8 @@ const mismaDireccion = (lead) => {
 };
 
 // Etiqueta del panel: si las liquidaciones cumplen 2,5 veces el arriendo
-function etiquetaRenta(l) {
-  if (!l.revision_datos || !l.valor_arriendo) return '';
+function etiquetaRenta(l, config) {
+  if (!config.revisionAutomatica || !l.revision_datos || !l.valor_arriendo) return '';
   let r = null;
   try {
     r = resumenRenta(l, JSON.parse(l.revision_datos));
@@ -365,6 +365,13 @@ const RESULTADO_VISITA = {
 const fechaHora = (iso) =>
   iso ? new Date(`${String(iso).replace(' ', 'T')}${/Z|[+-]\d\d:?\d\d$/.test(iso) ? '' : 'Z'}`).toLocaleString('es-CL', { timeZone: 'America/Santiago', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 
+// Casilla para que Bárbara marque que ya registró la visita en Breal
+const casillaBreal = (v) =>
+  `<form method="post" action="/admin/visita/${v.id}/breal" class="form-breal">
+    <input type="hidden" name="registrada" value="${v.breal_at ? '0' : '1'}">
+    <button class="casilla-breal ${v.breal_at ? 'hecha' : ''}" title="${v.breal_at ? `Registrada en Breal el ${esc(fechaHora(v.breal_at))}. Toca para desmarcar` : 'Marcar como registrada en Breal'}" aria-pressed="${v.breal_at ? 'true' : 'false'}">${v.breal_at ? '☑' : '☐'}<span> Registrado en Breal</span></button>
+  </form>`;
+
 const opcPanel = (config, nav) => ({ empresa: config.empresa.nombre, ancho: 'ancho', nav, pie: false });
 const linkWhatsapp = (tel) => (tel ? `<a href="https://wa.me/${esc(tel)}" target="_blank">+${esc(tel)}</a>` : '—');
 const bloqueDeVisita = (v) => describirBloque(...v.split(' ').map((x, i) => (i ? Number(x) : x)));
@@ -385,7 +392,7 @@ function panel({ leads, todos, visitas, sinResultado = [], recordados = null, ho
     .map(([k, t]) => `<option value="${k}" ${filtros.estado === k ? 'selected' : ''}>${esc(t)}</option>`)
     .join('');
   const filaVisita = (v) =>
-    `<tr><td class="col-principal">${esc(fechaLarga(v.fecha))}<span class="solo-movil"> · ${horaTexto(v.hora)}</span></td><td class="col-hora">${horaTexto(v.hora)}</td><td><a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a></td><td>${linkWhatsapp(v.telefono)}</td><td class="col-prop">${esc(v.propiedad || '—')}</td></tr>`;
+    `<tr><td class="col-principal">${esc(fechaLarga(v.fecha))}<span class="solo-movil"> · ${horaTexto(v.hora)}</span></td><td class="col-hora">${horaTexto(v.hora)}</td><td><a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a></td><td>${linkWhatsapp(v.telefono)}</td><td class="col-prop">${esc(v.propiedad || '—')}</td><td class="col-breal">${casillaBreal(v)}</td></tr>`;
 
   return layout(
     'Panel comercial',
@@ -442,11 +449,11 @@ function panel({ leads, todos, visitas, sinResultado = [], recordados = null, ho
         : ''
     }
     <section class="tarjeta">
-      <div class="titulo-seccion"><h1>Próximas visitas</h1><a class="boton chico" href="/admin/calendario">Ver calendario</a></div>
+      <div class="titulo-seccion" id="proximas"><div><h1>Próximas visitas</h1>${visitas.length ? `<span class="nota">${visitas.filter((v) => !v.breal_at).length ? `${visitas.filter((v) => !v.breal_at).length} por registrar en Breal` : '✅ Todas registradas en Breal'}</span>` : ''}</div><a class="boton chico" href="/admin/calendario">Ver calendario</a></div>
       ${
         visitas.length
-          ? `<div class="tabla-scroll"><table class="tabla tabla-movil"><thead><tr><th>Fecha</th><th>Hora</th><th>Interesado</th><th>Teléfono</th><th>Propiedad</th></tr></thead><tbody>
-          ${visitas.slice(0, 8).map(filaVisita).join('')}</tbody></table></div>`
+          ? `<div class="tabla-scroll"><table class="tabla tabla-movil"><thead><tr><th>Fecha</th><th>Hora</th><th>Interesado</th><th>Teléfono</th><th>Propiedad</th><th>Breal</th></tr></thead><tbody>
+          ${visitas.slice(0, 20).map(filaVisita).join('')}</tbody></table></div>`
           : '<p class="nota">No hay visitas agendadas.</p>'
       }
     </section>
@@ -471,7 +478,7 @@ function panel({ leads, todos, visitas, sinResultado = [], recordados = null, ho
               .map(
                 (l) => `<tr>
           <td class="col-id">${l.id}</td>
-          <td class="col-principal"><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}${etiquetaRenta(l)}${PLAZO_CORTO[l.plazo_cambio] ? ` <span class="tag-plazo plazo-${l.plazo_cambio}" title="${PLAZOS_CAMBIO[l.plazo_cambio]}">🚚 ${PLAZO_CORTO[l.plazo_cambio]}</span>` : ''}<br><small>${esc(l.email || '')}</small>
+          <td class="col-principal"><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}${etiquetaRenta(l, config)}${PLAZO_CORTO[l.plazo_cambio] ? ` <span class="tag-plazo plazo-${l.plazo_cambio}" title="${PLAZOS_CAMBIO[l.plazo_cambio]}">🚚 ${PLAZO_CORTO[l.plazo_cambio]}</span>` : ''}<br><small>${esc(l.email || '')}</small>
             ${l.duplicados ? `<br><span class="aviso-dup" title="Mismo teléfono o RUT que #${esc(l.duplicados)}">⚠️ Posible duplicado de ${l.duplicados.split(',').map((d) => `<a href="/admin/lead/${esc(d)}">#${esc(d)}</a>`).join(', ')}</span>` : ''}</td>
           <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>
@@ -559,7 +566,7 @@ function fichaAdmin({ lead, documentos, visita, revisionDocs = null, disponibles
       }
     </section>
 
-    ${seccionRevisionDocs(lead, revisionDocs)}
+    ${revisionDocs === false ? '' : seccionRevisionDocs(lead, revisionDocs)}
 
     ${seccionVisita(lead, visita, disponibles)}
 

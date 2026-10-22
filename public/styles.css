@@ -371,3 +371,8 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 .form-recordar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 8px 0 12px; }
 .form-cancelar-visita { display: grid; gap: 10px; margin-top: 14px; text-align: left; }
 .form-cancelar-visita textarea { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--borde); border-radius: 8px; }
+.form-breal { margin: 0; }
+.casilla-breal { border: 1px solid var(--borde); background: #fff; border-radius: 8px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; color: var(--suave); }
+.casilla-breal:hover { border-color: var(--azul); color: var(--azul); }
+.casilla-breal.hecha { background: var(--verde-claro); border-color: var(--verde); color: var(--verde-texto); font-weight: 700; }
+@media (min-width: 641px) { .casilla-breal span { display: none; } .casilla-breal { font-size: 18px; padding: 2px 10px; } }

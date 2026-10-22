@@ -102,6 +102,8 @@ function migrar(db) {
   if (!visitas.includes('resultado_pedido_at')) db.exec('ALTER TABLE visitas ADD COLUMN resultado_pedido_at TEXT');
   if (!visitas.includes('cancelada_por')) db.exec('ALTER TABLE visitas ADD COLUMN cancelada_por TEXT');
   if (!visitas.includes('motivo_cancelacion')) db.exec('ALTER TABLE visitas ADD COLUMN motivo_cancelacion TEXT');
+  // Bárbara marca cuándo registró la visita en Breal (contacto, interesado, negocio potencial y visita)
+  if (!visitas.includes('breal_at')) db.exec('ALTER TABLE visitas ADD COLUMN breal_at TEXT');
   const leads = columnas('leads');
   if (!leads.includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
   if (!leads.includes('plazo_cambio')) db.exec('ALTER TABLE leads ADD COLUMN plazo_cambio TEXT');
@@ -307,6 +309,8 @@ function crearRepositorio(db) {
         .all(desdeFecha, hastaFecha),
     marcarResultadoPedido: (visitaId) => db.prepare(`UPDATE visitas SET resultado_pedido_at = datetime('now') WHERE id = ?`).run(visitaId),
     visitaPorId: (id) => db.prepare('SELECT * FROM visitas WHERE id = ?').get(id),
+    marcarBreal: (visitaId, registrada) =>
+      db.prepare(`UPDATE visitas SET breal_at = ${registrada ? "datetime('now')" : 'NULL'} WHERE id = ?`).run(visitaId),
     marcarAvisoAgenda: (leadId) =>
       db.prepare(`UPDATE leads SET aviso_agenda_at = datetime('now'), avisos_agenda = COALESCE(avisos_agenda, 0) + 1 WHERE id = ?`).run(leadId),
 

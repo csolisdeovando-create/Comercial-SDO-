@@ -1043,7 +1043,7 @@ test('revisión automática: liquidaciones 2,5 veces el arriendo y certificado A
     consultas.push({ url, body: JSON.parse(opts.body) });
     return { status: 200, json: async () => ({ codigo: '0', data: { bytes: Buffer.from('%PDF-1.4 prueba').toString('base64') } }) };
   };
-  const ctx = await preparar({}, { lector, fetchAfp });
+  const ctx = await preparar({ REVISION_AUTOMATICA: 'true' }, { lector, fetchAfp });
   t.after(() => ctx.server.close());
   const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
 
@@ -1080,7 +1080,7 @@ test('revisión automática: liquidaciones 2,5 veces el arriendo y certificado A
 test('revisión automática: sin clave queda manual; AFP con captcha deja el link; complemento suma', async (t) => {
   const { evaluarRenta } = require('../src/evaluacionRenta');
   const { validarCertificado } = require('../src/validacionAfp');
-  const ctx = await preparar();
+  const ctx = await preparar({ REVISION_AUTOMATICA: 'true' });
   t.after(() => ctx.server.close());
   const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
   await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP) });
@@ -1246,4 +1246,37 @@ test('post-visita: al terminar se pide el resultado al equipo y se avisa al inte
   const seguimiento = ctx.correos.find((c) => c.to === 'luis@example.com');
   assert.match(seguimiento.subject, /No pudimos verte/);
   assert.match(seguimiento.html, new RegExp(`/agendar/${otro.token}`));
+});
+
+test('revisión automática en pausa: no lee documentos ni muestra la sección', async (t) => {
+  let leido = false;
+  const lector = { activo: true, leerLiquidaciones: async () => { leido = true; }, leerCertificadoAfp: async () => { leido = true; } };
+  const ctx = await preparar({}, { lector });
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
+  await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP) });
+  await ctx.app.locals.esperarTareas();
+  const lead = ctx.db.leadPorTelefono('56987654321');
+  assert.strictEqual(leido, false);
+  assert.doesNotMatch(await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text(), /Revisión automática/);
+});
+
+test('próximas visitas: casilla "Registrado en Breal" que marca Bárbara', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const lead = ctx.db.crearLead({ telefono: '56987654321', nombre: 'Ana Rojas', email: 'ana@example.com', propiedad: 'Rosario Sur 91', estado: 'agendado' });
+  const visita = ctx.db.crearVisita(lead.id, '2026-10-16', 11);
+  let panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.match(panel, /1 por registrar en Breal/);
+  assert.match(panel, new RegExp(`action="/admin/visita/${visita.id}/breal"`));
+  const r = await fetch(`${ctx.url}/admin/visita/${visita.id}/breal`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ registrada: '1' }) });
+  assert.strictEqual(r.status, 303);
+  assert.ok(ctx.db.visitaPorId(visita.id).breal_at);
+  panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.match(panel, /Todas registradas en Breal/);
+  assert.match(panel, /casilla-breal hecha/);
+  // Se puede desmarcar
+  await fetch(`${ctx.url}/admin/visita/${visita.id}/breal`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ registrada: '0' }) });
+  assert.strictEqual(ctx.db.visitaPorId(visita.id).breal_at, null);
 });
