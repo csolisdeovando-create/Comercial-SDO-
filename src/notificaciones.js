@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const { esc, formatearRut, firmar, tamanoLegible } = require('./utils');
-const { filasPersona, documentoTexto, PLAZOS_CAMBIO } = require('./personas');
+const { filasPersona, documentoTexto, PLAZOS_CAMBIO, camposFaltantes } = require('./personas');
 const { faltaDireccion } = require('./publicacion');
 const { REQUISITOS, nombreRequisito, textoRequisitosWhatsapp } = require('./requisitos');
 const { describirBloque, generarICS, textoDias } = require('./agenda');
@@ -210,6 +210,39 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
           : `Hola ${primerNombre(lead)} 😊 Revisamos tus documentos y ya puedes agendar tu visita. Elige día y hora aquí 📅\n${link}`,
         [primerNombre(lead) || 'cliente', link]
       );
+    },
+
+    // Se le pide al interesado que complete los datos que faltan (Bárbara los necesita para Breal)
+    async pedirDatos(lead) {
+      const link = `${config.baseUrl}/datos/${lead.token}`;
+      const faltan = camposFaltantes(lead);
+      await mailer.enviar({
+        to: lead.email,
+        subject: `Completa tus datos para tu arriendo – ${config.empresa.nombre}`,
+        html: correoHTML(
+          'Completa tus datos',
+          `<p>Hola ${esc(primerNombre(lead))},</p>
+           <p>Para preparar tu contrato necesitamos que completes algunos datos de tu postulación:</p>
+           <ul>${faltan.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>
+           <p>Te toma un par de minutos y no tienes que volver a subir documentos.</p>
+           ${boton('📝 Completar mis datos', link)}`
+        ),
+      });
+      await enviarWhatsappSeguro(lead, `Hola ${primerNombre(lead)} 😊 Para preparar tu contrato necesitamos que completes algunos datos. Te toma un par de minutos: ${link}`);
+    },
+
+    async datosCompletados(lead) {
+      await mailer
+        .enviar({
+          to: config.correo.documentos,
+          subject: `📝 ${lead.nombre} completó sus datos`,
+          html: correoHTML(
+            'Datos completados',
+            `<p><strong>${esc(lead.nombre)}</strong> completó los datos de su postulación. Ya puedes registrarlos en Breal.</p>${tablaLead(lead)}
+             <p>${boton('Ver ficha', `${config.baseUrl}/admin/lead/${lead.id}`, '#111417')}</p>`
+          ),
+        })
+        .catch((e) => console.error('[correo] aviso de datos completados falló:', e.message));
     },
 
     async rechazo(lead, motivo, permitirReenvio) {

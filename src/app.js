@@ -13,7 +13,7 @@ const { interpretarUrl, leerPublicacion, resumenPropiedad, pareceLink, faltaDire
 const { crearLector } = require('./lectura');
 const { validarCertificado } = require('./validacionAfp');
 const { MOTIVOS_NO_CONTINUA } = require('./notificaciones');
-const { validarPersona, CAMPOS_PERSONA, filasPersona, PLAZOS_CAMBIO } = require('./personas');
+const { validarPersona, CAMPOS_PERSONA, filasPersona, PLAZOS_CAMBIO, camposFaltantes } = require('./personas');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
 
@@ -262,6 +262,30 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     return lead;
   }
 
+  // Propiedad de interés, link del aviso y fecha de cambio (obligatorios). Puede mover el link a su campo.
+  function validarPropiedad(b) {
+    const errores = [];
+    if (!PLAZOS_CAMBIO[b.plazo_cambio]) errores.push('Indica para cuándo te quieres cambiar.');
+    // Pegó el link en la dirección: se mueve al campo del link y se le pide la dirección
+    if (pareceLink(b.propiedad)) {
+      if (!String(b.url_publicacion || '').trim()) b.url_publicacion = String(b.propiedad).trim();
+      b.propiedad = '';
+      errores.push('En "Dirección de la propiedad" escribe la dirección (calle, número y comuna). El link del aviso va en el campo de arriba.');
+    } else if (!String(b.propiedad || '').trim()) {
+      errores.push('Ingresa la dirección de la propiedad que quieres arrendar.');
+    }
+    if (!interpretarUrl(String(b.url_publicacion || '').slice(0, 2000))) {
+      errores.push('Pega el link del aviso de la propiedad que te interesa (Mercado Libre, Yapo, Portal Inmobiliario…).');
+    }
+    const soloLetras = (t) => sinTildes(t).replace(/[^a-z0-9]/g, '');
+    const dirPropiedad = soloLetras(b.propiedad);
+    const dirActual = soloLetras(b.direccion_actual);
+    if (dirPropiedad.length >= 6 && dirActual.length >= 6 && (dirPropiedad.includes(dirActual) || dirActual.includes(dirPropiedad))) {
+      errores.push('En "Dirección de la propiedad" va la dirección de la propiedad que quieres arrendar (la del aviso), no tu dirección actual.');
+    }
+    return errores;
+  }
+
   function mostrarFormulario(req, res, lead) {
     if (lead && ['aprobado', 'agendado', 'no_asistio'].includes(lead.estado)) return res.redirect(`/agendar/${lead.token}`);
     if (lead && lead.estado === 'documentos_recibidos') {
@@ -271,6 +295,40 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     }
     res.send(vistas.formularioPostulacion({ lead, config }));
   }
+
+  // El interesado completa los datos que faltan (link que le envía el equipo); no vuelve a subir documentos
+  app.get('/datos/:token', (req, res) => {
+    const lead = leadDesdeToken(req, res);
+    if (!lead) return;
+    // Si la dirección era un texto armado desde el link (falta dirección), se le pide escribirla
+    res.send(vistas.formularioDatos({ lead, valores: { ...lead, propiedad: faltaDireccion(lead.propiedad) ? '' : lead.propiedad }, config }));
+  });
+
+  app.post('/datos/:token', express.urlencoded({ extended: false, limit: '50kb' }), async (req, res) => {
+    let lead = leadDesdeToken(req, res);
+    if (!lead) return;
+    const b = req.body || {};
+    const titular = validarPersona(b, '', '', ahora());
+    const errores = [...titular.errores, ...validarPropiedad(b)];
+    const quienComp = lead.comp_rol === 'aval' ? 'quien es aval' : 'quien complementa renta';
+    const comp = lead.complementa ? validarPersona(b, PREFIJO_COMP, quienComp, ahora()) : null;
+    if (comp) {
+      errores.push(...comp.errores);
+      if (!String(b.comp_relacion || '').trim()) errores.push(`Indica qué relación tiene ${quienComp} contigo (ej: pareja, padre).`);
+      if (comp.datos.comp_rut && comp.datos.comp_rut === titular.datos.rut) errores.push('Tu aval o complemento debe ser otra persona (el documento es el mismo).');
+    }
+    if (errores.length) return res.status(422).send(vistas.formularioDatos({ lead, valores: { ...lead, ...b }, errores, config }));
+    const pub = await leerPublicacion(String(b.url_publicacion).slice(0, 2000), { timeoutMs: 3000 });
+    lead = db.actualizarLead(lead.id, {
+      ...titular.datos,
+      propiedad: String(b.propiedad).trim().slice(0, 300),
+      url_publicacion: pub?.url || lead.url_publicacion,
+      plazo_cambio: b.plazo_cambio,
+      ...(comp ? { ...comp.datos, comp_relacion: String(b.comp_relacion).trim().slice(0, 80) } : {}),
+    });
+    await notif.datosCompletados(lead);
+    res.send(vistas.mensaje('¡Datos guardados!', 'Gracias, ya tenemos todos tus datos. Nuestro equipo seguirá con tu postulación.', { ...opcVista, icono: '✅' }));
+  });
 
   app.get('/', (_req, res) => res.redirect('/postular'));
   app.get('/salud', (_req, res) => res.json({ ok: true }));
@@ -312,24 +370,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       const titular = validarPersona(b, '', '', ahora());
       errores.push(...titular.errores);
       const plazoCambio = PLAZOS_CAMBIO[b.plazo_cambio] ? b.plazo_cambio : null;
-      if (!plazoCambio) errores.push('Indica para cuándo te quieres cambiar.');
-      // Pegó el link en la dirección: se mueve al campo del link y se le pide la dirección
-      if (pareceLink(b.propiedad)) {
-        if (!String(b.url_publicacion || '').trim()) b.url_publicacion = String(b.propiedad).trim();
-        b.propiedad = '';
-        errores.push('En "Dirección de la propiedad" escribe la dirección (calle, número y comuna). El link del aviso va en el campo de arriba.');
-      } else if (!String(b.propiedad || '').trim()) {
-        errores.push('Ingresa la dirección de la propiedad que quieres arrendar.');
-      }
-      if (!interpretarUrl(String(b.url_publicacion || '').slice(0, 2000))) {
-        errores.push('Pega el link del aviso de la propiedad que te interesa (Mercado Libre, Yapo, Portal Inmobiliario…).');
-      }
-      const soloLetras = (t) => sinTildes(t).replace(/[^a-z0-9]/g, '');
-      const dirPropiedad = soloLetras(b.propiedad);
-      const dirActual = soloLetras(b.direccion_actual);
-      if (dirPropiedad.length >= 6 && dirActual.length >= 6 && (dirPropiedad.includes(dirActual) || dirActual.includes(dirPropiedad))) {
-        errores.push('En "Dirección de la propiedad" va la dirección de la propiedad que quieres arrendar (la del aviso), no tu dirección actual.');
-      }
+      errores.push(...validarPropiedad(b));
       if (b.rut_empresa && !rutValido(b.rut_empresa)) errores.push('El RUT de la empresa no es válido.');
       const telefono = titular.telefono;
       if (!b.consentimiento) errores.push('Debes autorizar el uso de tus datos para evaluar la postulación.');
@@ -345,6 +386,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       const quienComp = compRol === 'aval' ? 'quien es aval' : 'quien complementa renta';
       let comp = null;
       if (complementa) {
+        if (!String(b.comp_relacion || '').trim()) errores.push(`Indica qué relación tiene ${quienComp} con quien postula (ej: pareja, padre).`);
         if (!compTipo) errores.push(`Indica si ${quienComp} es dependiente o independiente.`);
         comp = validarPersona(b, PREFIJO_COMP, quienComp, ahora());
         errores.push(...comp.errores);
@@ -1123,6 +1165,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     resultado: 'Resultado de la visita guardado.',
     resultado_aviso: 'Resultado guardado y mensaje enviado al interesado.',
     recordado: 'Le enviamos al interesado un recordatorio para que agende su visita.',
+    datos_pedidos: 'Le enviamos al interesado el link para que complete sus datos.',
     cancelada: 'Visita cancelada. El horario quedó libre.',
     cancelada_aviso: 'Visita cancelada. Le enviamos al interesado el link para elegir otro horario.',
     agendada: 'Visita agendada. Se avisó al equipo y se agregó a su calendario.',
@@ -1185,6 +1228,15 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     const visita = db.visitaPorId(Number(req.params.id));
     if (visita) db.marcarBreal(visita.id, req.body?.registrada === '1');
     res.redirect(303, `/admin${req.body?.volver === 'calendario' ? '/calendario' : ''}#proximas`);
+  });
+
+  app.post('/admin/lead/:id/pedir-datos', formAdmin, async (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    if (!lead.email || !camposFaltantes(lead).length) return res.redirect(303, `/admin/lead/${lead.id}`);
+    await notif.pedirDatos(lead).catch((e) => console.error('[panel] pedir datos:', e));
+    db.actualizarLead(lead.id, { datos_pedidos_at: new Date().toISOString() });
+    res.redirect(303, `/admin/lead/${lead.id}?ok=datos_pedidos`);
   });
 
   // Recordarle al interesado aprobado que elija su horario de visita

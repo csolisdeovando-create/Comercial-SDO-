@@ -776,7 +776,7 @@ test('datos personales completos: pasaporte, mayoría de edad, aval y ficha', as
 
   // Extranjero con pasaporte + aval
   const AVAL = {
-    complementa: '1', comp_rol: 'aval', comp_tipo: 'dependiente', comp_nombre: 'Rosa Díaz', comp_rut: '11.111.111-1', comp_doc_tipo: 'rut',
+    complementa: '1', comp_rol: 'aval', comp_relacion: 'Madre', comp_tipo: 'dependiente', comp_nombre: 'Rosa Díaz', comp_rut: '11.111.111-1', comp_doc_tipo: 'rut',
     comp_nacionalidad: 'Chilena', comp_fecha_nacimiento: '1965-07-01', comp_estado_civil: 'Viudo/a', comp_profesion: 'Profesora',
     comp_direccion_actual: 'Irarrázaval 2000', comp_comuna: 'Ñuñoa', comp_telefono: '+56 9 4444 5555', comp_email: 'rosa@example.com',
   };
@@ -826,7 +826,7 @@ test('formulario completo como lo envía el navegador (todos los campos, con ava
   assert.ok(textos.length > 30, `el formulario tiene ${textos.length} campos de texto`);
   const datos = Object.fromEntries(textos.map((n) => [n, '']));
   Object.assign(datos, DATOS, {
-    complementa: '1', comp_rol: 'aval', comp_tipo: 'dependiente', comp_nombre: 'Rosa Díaz', comp_rut: '76.086.428-5', comp_doc_tipo: 'rut',
+    complementa: '1', comp_rol: 'aval', comp_relacion: 'Madre', comp_tipo: 'dependiente', comp_nombre: 'Rosa Díaz', comp_rut: '76.086.428-5', comp_doc_tipo: 'rut',
     comp_nacionalidad: 'Chilena', comp_fecha_nacimiento: '1965-07-01', comp_estado_civil: 'Viudo/a', comp_profesion: 'Profesora',
     comp_direccion_actual: 'Irarrázaval 2000', comp_comuna: 'Ñuñoa', comp_telefono: '+56 9 4444 5555', comp_email: 'rosa@example.com',
   });
@@ -1305,4 +1305,61 @@ test('resultado "no continúa" con el motivo de Breal', async (t) => {
   // Un motivo inventado no se guarda
   await fetch(`${ctx.url}/admin/lead/${lead.id}/visita`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ resultado: 'no_continua', motivo: 'otra cosa' }) });
   assert.strictEqual(ctx.db.visitaPorId(v.id).motivo_resultado, null);
+});
+
+test('datos incompletos: el equipo le pide al interesado que los complete (sin volver a subir documentos)', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  // Postuló antes de que se pidieran todos los datos
+  const lead = ctx.db.crearLead({ telefono: '56998241698', nombre: 'ANDRES TAMAYO LOPEZ', email: 'andres@example.com', rut: '94889766', estado: 'agendado', tipo: 'dependiente' });
+
+  let ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Faltan datos para Breal:<\/strong> Nacionalidad, Fecha de nacimiento, Estado civil/);
+  assert.match(await (await fetch(`${ctx.url}/admin`, { headers: h })).text(), /Datos incompletos/);
+
+  const r = await fetch(`${ctx.url}/admin/lead/${lead.id}/pedir-datos`, { method: 'POST', headers: h, redirect: 'manual' });
+  assert.match(r.headers.get('location'), /ok=datos_pedidos/);
+  const correo = ctx.correos.find((c) => c.to === 'andres@example.com');
+  assert.match(correo.subject, /Completa tus datos/);
+  assert.match(correo.html, new RegExp(`/datos/${lead.token}`));
+  assert.match(correo.html, /<li>Nacionalidad<\/li>/);
+
+  // El formulario viene con lo que ya tenemos
+  const form = await (await fetch(`${ctx.url}/datos/${lead.token}`)).text();
+  assert.match(form, /value="ANDRES TAMAYO LOPEZ"/);
+  assert.match(form, /value="9\.488\.976-6"/);
+  assert.doesNotMatch(form, /type="file"/);
+
+  // Faltan datos -> se vuelven a pedir
+  let res = await fetch(`${ctx.url}/datos/${lead.token}`, { method: 'POST', body: new URLSearchParams({ nombre: 'ANDRES TAMAYO LOPEZ', rut: '9.488.976-6', doc_tipo: 'rut' }) });
+  assert.strictEqual(res.status, 422);
+  assert.match(await res.text(), /Indica la nacionalidad/);
+
+  res = await fetch(`${ctx.url}/datos/${lead.token}`, {
+    method: 'POST',
+    body: new URLSearchParams({
+      nombre: 'ANDRES TAMAYO LOPEZ', doc_tipo: 'rut', rut: '9.488.976-6', nacionalidad: 'Chilena', fecha_nacimiento: '1963-06-25', estado_civil: 'Separado/a',
+      profesion: 'Ingeniero', direccion_actual: 'Paso el Roble 50', comuna: 'La Florida', telefono: '+56 9 9824 1698', email: 'andres@example.com',
+      url_publicacion: 'https://www.yapo.cl/bienes-raices-alquiler-apartamentos/vicuna-mackenna-5862/180528', propiedad: 'Vicuña Mackenna 5862, depto 905', plazo_cambio: '5_dias',
+    }),
+  });
+  assert.match(await res.text(), /Datos guardados/);
+  const actualizado = ctx.db.leadPorId(lead.id);
+  assert.strictEqual(actualizado.comuna, 'La Florida');
+  assert.strictEqual(actualizado.propiedad, 'Vicuña Mackenna 5862, depto 905');
+  assert.strictEqual(actualizado.estado, 'agendado', 'no cambia su estado');
+  assert.ok(ctx.correos.some((c) => /completó sus datos/.test(c.subject) && c.to.includes('sdopropiedades@sdorent.cl')));
+  ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.doesNotMatch(ficha, /Faltan datos para Breal/);
+});
+
+test('postulación: la relación de quien complementa renta o es aval es obligatoria', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const form = await (await fetch(`${ctx.url}/postular`)).text();
+  assert.match(form, /Todos los datos son obligatorios/);
+  const r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, complementa: '1', comp_rol: 'aval', comp_tipo: 'dependiente' }, DOCS_DEP) });
+  assert.strictEqual(r.status, 422);
+  assert.match(await r.text(), /Indica qué relación tiene quien es aval/);
 });

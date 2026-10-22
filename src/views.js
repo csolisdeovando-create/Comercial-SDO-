@@ -1,6 +1,6 @@
 const { esc, formatearRut, tamanoLegible } = require('./utils');
 const { REQUISITOS, nombreRequisito } = require('./requisitos');
-const { formularioPersona, filasPersona, PLAZOS_CAMBIO } = require('./personas');
+const { formularioPersona, filasPersona, PLAZOS_CAMBIO, camposFaltantes } = require('./personas');
 const { faltaDireccion } = require('./publicacion');
 const { evaluarRenta, alertasAfp } = require('./evaluacionRenta');
 const { MOTIVOS_NO_CONTINUA, resultadoBreal } = require('./notificaciones');
@@ -68,6 +68,26 @@ const VERSION = Date.now().toString(36);
 
 const ACEPTA = '.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,image/*,application/pdf';
 
+// Link del aviso, dirección de la propiedad y fecha de cambio (postulación y "completar datos")
+function camposPropiedad(v) {
+  const val = (k) => esc(v[k] ?? '');
+  return `          <label for="url_publicacion">Link de la publicación que te interesa
+            <input id="url_publicacion" name="url_publicacion" type="text" inputmode="url" autocomplete="off" required placeholder="Pega aquí el link del aviso (Mercado Libre, Yapo, Portal Inmobiliario…)" value="${val('url_publicacion')}" data-publicacion>
+          </label>
+          <div class="vista-publicacion" id="vista-publicacion" hidden aria-live="polite"></div>
+          <label for="propiedad">Dirección de la propiedad que quieres arrendar <small class="nota">(la del aviso, no tu dirección actual)</small>
+            <input id="propiedad" name="propiedad" required placeholder="Ej: Rosario Sur 91, depto 504, Las Condes" value="${val('propiedad')}">
+          </label>
+          <div class="campo-plazo" role="radiogroup" aria-labelledby="plazo-titulo">
+            <span id="plazo-titulo" class="etiqueta">¿Para cuándo te quieres cambiar?</span>
+            <div class="opciones-plazo">
+              ${Object.entries(PLAZOS_CAMBIO)
+                .map(([k, t]) => `<label class="opcion"><input type="radio" name="plazo_cambio" value="${k}" required ${v.plazo_cambio === k ? 'checked' : ''}><span>${t}</span></label>`)
+                .join('')}
+            </div>
+          </div>`;
+}
+
 function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
   const v = { ...lead, ...valores };
   if (!v.tipo) v.tipo = 'dependiente';
@@ -118,6 +138,7 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
     `<section class="tarjeta">
       <h1>Postula a la propiedad</h1>
       <p class="lead">Completa tus datos y sube tus documentos. Nuestro equipo los revisará y te enviaremos un calendario para que agendes tu visita.</p>
+      <p class="nota obligatorio">Todos los datos son obligatorios (solo los comentarios son opcionales): los necesitamos para preparar tu contrato.</p>
       ${errores.length ? `<div class="alerta error"><strong>Revisa lo siguiente:</strong><ul>${errores.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>` : ''}
       <form method="post" action="/postular${lead?.token ? `/${esc(lead.token)}` : ''}" enctype="multipart/form-data" id="form-postulacion" novalidate>
         <fieldset>
@@ -139,21 +160,7 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
 
         <fieldset>
           <legend>La propiedad que quieres arrendar</legend>
-          <label for="url_publicacion">Link de la publicación que te interesa
-            <input id="url_publicacion" name="url_publicacion" type="text" inputmode="url" autocomplete="off" required placeholder="Pega aquí el link del aviso (Mercado Libre, Yapo, Portal Inmobiliario…)" value="${val('url_publicacion')}" data-publicacion>
-          </label>
-          <div class="vista-publicacion" id="vista-publicacion" hidden aria-live="polite"></div>
-          <label for="propiedad">Dirección de la propiedad que quieres arrendar <small class="nota">(la del aviso, no tu dirección actual)</small>
-            <input id="propiedad" name="propiedad" required placeholder="Ej: Rosario Sur 91, depto 504, Las Condes" value="${val('propiedad')}">
-          </label>
-          <div class="campo-plazo" role="radiogroup" aria-labelledby="plazo-titulo">
-            <span id="plazo-titulo" class="etiqueta">¿Para cuándo te quieres cambiar?</span>
-            <div class="opciones-plazo">
-              ${Object.entries(PLAZOS_CAMBIO)
-                .map(([k, t]) => `<label class="opcion"><input type="radio" name="plazo_cambio" value="${k}" required ${v.plazo_cambio === k ? 'checked' : ''}><span>${t}</span></label>`)
-                .join('')}
-            </div>
-          </div>
+          ${camposPropiedad(v)}
         </fieldset>
 
         ${seccionDocs('dependiente')}
@@ -176,7 +183,7 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
             </div>
             <p class="subtitulo">Sus datos</p>
             ${formularioPersona(v, 'comp_')}
-            <label>Relación con quien postula <small class="nota">(opcional)</small><input name="comp_relacion" placeholder="Ej: pareja, padre, hermana" value="${val('comp_relacion')}"></label>
+            <label>Relación con quien postula<input name="comp_relacion" data-req-comp placeholder="Ej: pareja, padre, hermana" value="${val('comp_relacion')}"></label>
           </div>
         </fieldset>
         ${seccionDocs('dependiente', 'comp')}
@@ -479,7 +486,7 @@ function panel({ leads, todos, visitas, sinResultado = [], recordados = null, ho
               .map(
                 (l) => `<tr>
           <td class="col-id">${l.id}</td>
-          <td class="col-principal"><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}${etiquetaRenta(l, config)}${PLAZO_CORTO[l.plazo_cambio] ? ` <span class="tag-plazo plazo-${l.plazo_cambio}" title="${PLAZOS_CAMBIO[l.plazo_cambio]}">🚚 ${PLAZO_CORTO[l.plazo_cambio]}</span>` : ''}<br><small>${esc(l.email || '')}</small>
+          <td class="col-principal"><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}${etiquetaRenta(l, config)}${camposFaltantes(l).length ? ` <span class="tag-faltan" title="Faltan: ${esc(camposFaltantes(l).join(', '))}">⚠️ Datos incompletos</span>` : ''}${PLAZO_CORTO[l.plazo_cambio] ? ` <span class="tag-plazo plazo-${l.plazo_cambio}" title="${PLAZOS_CAMBIO[l.plazo_cambio]}">🚚 ${PLAZO_CORTO[l.plazo_cambio]}</span>` : ''}<br><small>${esc(l.email || '')}</small>
             ${l.duplicados ? `<br><span class="aviso-dup" title="Mismo teléfono o RUT que #${esc(l.duplicados)}">⚠️ Posible duplicado de ${l.duplicados.split(',').map((d) => `<a href="/admin/lead/${esc(d)}">#${esc(d)}</a>`).join(', ')}</span>` : ''}</td>
           <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>
@@ -524,6 +531,7 @@ function fichaAdmin({ lead, documentos, visita, revisionDocs = null, disponibles
       </div>
       ${lead.motivo_rechazo ? `<div class="alerta error">Motivo informado: ${esc(lead.motivo_rechazo)}</div>` : ''}
       ${fichaLead(lead)}
+      ${avisoDatosFaltantes(lead)}
       ${formPropiedad(lead, visita)}
       ${lead.mensaje_inicial ? `<p class="nota">Primer mensaje por WhatsApp: “${esc(lead.mensaje_inicial)}”</p>` : ''}
     </section>
@@ -693,6 +701,49 @@ function seccionRevisionDocs(lead, revision) {
       </div>
       <p class="nota">Leído automáticamente el ${esc(new Date(d.leido_at).toLocaleString('es-CL', { timeZone: 'America/Santiago', dateStyle: 'short', timeStyle: 'short' }))} · Es una ayuda: confirma con los documentos antes de aprobar.</p>
     </section>`;
+}
+
+// Ficha: qué datos faltan (los necesita Bárbara para llenar Breal) y botón para pedírselos al interesado
+function avisoDatosFaltantes(lead) {
+  const faltan = camposFaltantes(lead);
+  if (!faltan.length) return '';
+  return `<div class="alerta aviso datos-faltantes">⚠️ <strong>Faltan datos para Breal:</strong> ${esc(faltan.join(', '))}.
+      ${
+        lead.email
+          ? `<form method="post" action="/admin/lead/${lead.id}/pedir-datos" class="form-recordar">
+        <button class="boton chico">📨 Pedirle que complete sus datos</button>
+        ${lead.datos_pedidos_at ? `<span class="nota">Pedido el ${esc(fechaHora(lead.datos_pedidos_at))}</span>` : ''}
+      </form>`
+          : ''
+      }</div>`;
+}
+
+// Formulario para que el interesado complete los datos que faltan (sin volver a subir documentos)
+function formularioDatos({ lead, valores: v, errores = [], config }) {
+  return layout(
+    'Completa tus datos',
+    `<section class="tarjeta">
+      <h1>Completa tus datos</h1>
+      <p class="lead">Hola ${esc(String(lead.nombre || '').split(' ')[0])}, para preparar tu contrato necesitamos todos tus datos. No tienes que volver a subir documentos.</p>
+      <p class="nota obligatorio">Todos los campos son obligatorios.</p>
+      ${errores.length ? `<div class="alerta error"><strong>Revisa lo siguiente:</strong><ul>${errores.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>` : ''}
+      <form method="post" action="/datos/${esc(lead.token)}" id="form-postulacion" novalidate>
+        <fieldset><legend>Tus datos</legend>${formularioPersona(v, '')}</fieldset>
+        <fieldset><legend>La propiedad que quieres arrendar</legend>${camposPropiedad(v)}</fieldset>
+        ${
+          lead.complementa
+            ? `<fieldset><legend>${lead.comp_rol === 'aval' ? 'Datos de tu aval' : 'Datos de quien complementa renta'}</legend>
+          ${formularioPersona(v, 'comp_').replace(/data-req-comp/g, 'required')}
+          <label>Relación con quien postula<input name="comp_relacion" required placeholder="Ej: pareja, padre, hermana" value="${esc(v.comp_relacion ?? '')}"></label>
+        </fieldset>`
+            : ''
+        }
+        <button type="submit" class="boton primario grande">Guardar mis datos</button>
+        <p id="estado-envio" class="nota" hidden>Guardando…</p>
+      </form>
+    </section>`,
+    { empresa: config.empresa.nombre, scripts: ['/static/postular.js'] }
+  );
 }
 
 function formPropiedad(lead, visita) {
@@ -1039,4 +1090,4 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   );
 }
 
-module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, resultadoVisita, confirmarEliminar, ingresar };
+module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, resultadoVisita, formularioDatos, confirmarEliminar, ingresar };

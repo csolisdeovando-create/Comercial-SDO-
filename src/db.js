@@ -114,6 +114,7 @@ function migrar(db) {
   // Recordatorios del equipo para que agende (aprobados que aún no eligen horario)
   if (!leads.includes('aviso_agenda_at')) db.exec('ALTER TABLE leads ADD COLUMN aviso_agenda_at TEXT');
   if (!leads.includes('avisos_agenda')) db.exec('ALTER TABLE leads ADD COLUMN avisos_agenda INTEGER DEFAULT 0');
+  if (!leads.includes('datos_pedidos_at')) db.exec('ALTER TABLE leads ADD COLUMN datos_pedidos_at TEXT');
   // Persona que complementa renta o es aval, y datos personales completos de ambos
   const personales = ['doc_tipo', 'nacionalidad', 'fecha_nacimiento', 'estado_civil', 'profesion', 'direccion_actual', 'comuna'];
   for (const col of [

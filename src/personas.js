@@ -148,4 +148,30 @@ function filasPersona(l, prefijo = '') {
   ].filter(([, v]) => v);
 }
 
-module.exports = { PLAZOS_CAMBIO, ESTADOS_CIVILES, CAMPOS_PERSONA, formularioPersona, validarPersona, filasPersona, documentoTexto, fechaLegible };
+// Datos que faltan en la ficha (para pedirle al interesado que los complete y que Bárbara llene Breal)
+const ETIQUETAS_CAMPO = {
+  nombre: 'Nombre completo',
+  rut: 'RUT o pasaporte',
+  nacionalidad: 'Nacionalidad',
+  fecha_nacimiento: 'Fecha de nacimiento',
+  estado_civil: 'Estado civil',
+  profesion: 'Profesión u ocupación',
+  direccion_actual: 'Dirección actual',
+  comuna: 'Comuna',
+  telefono: 'Teléfono',
+  email: 'Correo',
+};
+function camposFaltantes(lead) {
+  const faltan = Object.entries(ETIQUETAS_CAMPO).filter(([c]) => !lead[c]).map(([, t]) => t);
+  if (!lead.propiedad || String(lead.propiedad).includes('(falta dirección)')) faltan.push('Dirección de la propiedad de interés');
+  if (!lead.url_publicacion) faltan.push('Link de la publicación');
+  if (!lead.plazo_cambio) faltan.push('Fecha de cambio');
+  if (lead.complementa) {
+    const quien = lead.comp_rol === 'aval' ? 'Aval' : 'Complemento';
+    faltan.push(...Object.entries(ETIQUETAS_CAMPO).filter(([c]) => !lead[`comp_${c}`]).map(([, t]) => `${quien}: ${t}`));
+    if (!lead.comp_relacion) faltan.push(`${quien}: Relación`);
+  }
+  return faltan;
+}
+
+module.exports = { camposFaltantes, PLAZOS_CAMBIO, ESTADOS_CIVILES, CAMPOS_PERSONA, formularioPersona, validarPersona, filasPersona, documentoTexto, fechaLegible };
