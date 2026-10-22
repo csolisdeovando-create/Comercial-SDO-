@@ -1389,7 +1389,7 @@ test('indicadores: embudo, actividad y JSON con clave para el panel de Cristian'
   t.after(() => ctx.server.close());
   const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
   const mk = (n, extra) => ctx.db.crearLead({ telefono: `5690000000${n}`, nombre: `Persona ${n}`, email: `p${n}@x.cl`, portal: n % 2 ? 'Yapo' : 'Mercado Libre', documentos_at: '2026-10-10T12:00:00Z', ...extra });
-  const a = mk(1, { aprobado_at: '2026-10-11T12:00:00Z', estado: 'visitado' });
+  const a = mk(1, { aprobado_at: '2026-10-11T12:00:00Z', estado: 'visitado', rut: '12.345.678-5' });
   const b = mk(2, { aprobado_at: '2026-10-12T12:00:00Z', estado: 'no_asistio' });
   mk(3, { estado: 'documentos_recibidos' });
   mk(4, { aprobado_at: '2026-10-12T12:00:00Z', estado: 'aprobado' });
@@ -1417,6 +1417,13 @@ test('indicadores: embudo, actividad y JSON con clave para el panel de Cristian'
   assert.strictEqual(d.pendientes.porRevisar, 1);
   const fila = d.interesados.find((x) => x.id === a.id);
   assert.deepStrictEqual([fila.telefono, fila.visita.resultado, fila.visita.registradaEnBreal], ['+56900000001', 'realizada', true]);
+  // Seguimiento para cruzar con BReal: sin datos personales, con la clave que el panel calcula desde el RUT
+  const seg = await (await fetch(`${ctx.url}/api/indicadores?seguimiento=1`, { headers: { authorization: 'Bearer token-kpi-123' } })).json();
+  assert.strictEqual(seg.interesados, undefined);
+  assert.strictEqual(seg.seguimiento.length, 1); // solo quien tiene RUT
+  const clave = require('node:crypto').createHash('sha256').update('sdo-rent:123456785').digest('hex').slice(0, 32);
+  assert.deepStrictEqual(seg.seguimiento[0], { clave, portal: 'Yapo', postulacion: '2026-10-10', aprobado: '2026-10-11', rechazado: null, agendo: '2026-10-13', visito: '2026-10-13', resultado: 'realizada', motivo: null, registradaEnBreal: true });
+  assert.doesNotMatch(JSON.stringify(seg.seguimiento), /Persona|@x\.cl|5690000/);
   // Sin clave configurada, el endpoint no existe
   const sin = await preparar();
   t.after(() => sin.server.close());

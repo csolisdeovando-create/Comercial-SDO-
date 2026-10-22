@@ -1,6 +1,9 @@
 // Indicadores comerciales (KPI): embudo de las postulaciones de un período, actividad de visitas y pendientes.
 // Se muestran en el panel y se entregan en JSON para el panel de Cristian (Breal), que cruza por RUT o teléfono.
 
+const crypto = require('node:crypto');
+const { limpiarRut } = require('./utils');
+
 const dia = (iso) => (iso ? String(iso).slice(0, 10) : null);
 const enPeriodo = (iso, desde, hasta) => {
   const d = dia(iso);
@@ -132,4 +135,39 @@ function detalleInteresados({ leads, visitas, desde, hasta }) {
     });
 }
 
-module.exports = { calcularIndicadores, detalleInteresados };
+// Clave para cruzar con BReal sin entregar el RUT: el panel de Cristian calcula la misma con el RUT del Contacto
+const claveRut = (rut) => {
+  const r = limpiarRut(rut);
+  return r ? crypto.createHash('sha256').update(`sdo-rent:${r}`).digest('hex').slice(0, 32) : null;
+};
+
+// Una fila por interesado del período, sin nombre, RUT, teléfono ni correo: solo la clave, el portal y la fecha de cada paso
+function seguimientoAnonimo({ leads, visitas, desde, hasta }) {
+  const deLead = new Map();
+  for (const v of visitas) {
+    if (v.estado === 'reagendada') continue;
+    if (!deLead.has(v.lead_id)) deLead.set(v.lead_id, []);
+    deLead.get(v.lead_id).push(v);
+  }
+  return leads
+    .filter((l) => enPeriodo(l.documentos_at, desde, hasta) && claveRut(l.rut))
+    .map((l) => {
+      const vs = (deLead.get(l.id) || []).sort((a, b) => `${a.fecha}${a.hora}`.localeCompare(`${b.fecha}${b.hora}`));
+      const hecha = vs.find((v) => v.resultado === 'realizada' || v.resultado === 'no_continua');
+      const ultima = vs.at(-1);
+      return {
+        clave: claveRut(l.rut),
+        portal: l.portal || 'Sin origen',
+        postulacion: dia(l.documentos_at),
+        aprobado: dia(l.aprobado_at),
+        rechazado: dia(l.rechazado_at),
+        agendo: vs.length ? vs[0].fecha : null,
+        visito: hecha ? hecha.fecha : null,
+        resultado: ultima ? ultima.resultado || (ultima.estado === 'cancelada' ? 'cancelada' : null) : null,
+        motivo: ultima ? ultima.motivo_resultado || null : null,
+        registradaEnBreal: vs.some((v) => v.breal_at),
+      };
+    });
+}
+
+module.exports = { calcularIndicadores, detalleInteresados, seguimientoAnonimo, claveRut };

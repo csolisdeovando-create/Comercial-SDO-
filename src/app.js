@@ -14,7 +14,7 @@ const { interpretarUrl, leerPublicacion, resumenPropiedad, pareceLink, faltaDire
 const { crearLector } = require('./lectura');
 const { validarCertificado } = require('./validacionAfp');
 const { MOTIVOS_NO_CONTINUA } = require('./notificaciones');
-const { calcularIndicadores, detalleInteresados } = require('./indicadores');
+const { calcularIndicadores, detalleInteresados, seguimientoAnonimo } = require('./indicadores');
 const { validarPersona, CAMPOS_PERSONA, filasPersona, PLAZOS_CAMBIO, camposFaltantes } = require('./personas');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
@@ -1025,6 +1025,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     if (!igualSeguro(token, config.indicadoresToken)) return res.status(401).json({ error: 'token inválido' });
     const p = periodoIndicadores(req.query);
     const datos = indicadores(p);
+    if (req.query.seguimiento === '1') datos.seguimiento = seguimientoAnonimo({ leads: db.todosLosLeads(), visitas: db.todasLasVisitas(), desde: p.desde, hasta: p.hasta });
     if (req.query.detalle === '1') datos.interesados = detalleInteresados({ leads: db.todosLosLeads(), visitas: db.todasLasVisitas(), desde: p.desde, hasta: p.hasta });
     res.set('Cache-Control', 'no-store').json({ generado: new Date().toISOString(), ...datos });
   });
