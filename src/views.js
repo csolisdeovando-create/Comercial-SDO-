@@ -14,6 +14,7 @@ function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = ''
     ? `<nav class="menu">${[
         ['leads', '/admin', 'Interesados'],
         ['calendario', '/admin/calendario', 'Calendario de visitas'],
+        ['indicadores', '/admin/indicadores', 'Indicadores'],
       ]
         .map(([k, href, txt]) => `<a href="${href}" class="${nav === k ? 'activo' : ''}">${txt}</a>`)
         .join('')}<a href="/salir" class="salir">Salir</a></nav>`
@@ -42,6 +43,7 @@ function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = ''
 ${cuerpo}
 </main>
 ${pie ? `<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación de arriendo.</footer>` : ''}
+${nav ? '<footer class="pie contenedor">SDO Comercial · Desarrollado por José Cano · Todos los derechos reservados</footer>' : ''}
 ${scripts.map((sc) => `<script src="${sc}?v=${VERSION}" defer></script>`).join('\n')}
 ${nav || titulo === 'Ingresar al panel' ? `<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {});</script>` : ''}
 </body>
@@ -764,6 +766,72 @@ function formPropiedad(lead, visita) {
 const selectMotivo = (visita) => `<label class="motivo-resultado">Si no continúa, ¿por qué? <small class="nota">(para Breal)</small>
     <select name="motivo"><option value="">—</option>${MOTIVOS_NO_CONTINUA.map((m) => `<option${visita.motivo_resultado === m ? ' selected' : ''}>${m}</option>`).join('')}</select></label>`;
 
+// Indicadores (KPI): embudo de las postulaciones del período, actividad de visitas, tiempos y pendientes
+function indicadores({ datos: d, periodo, config }) {
+  const periodos = [['30', 'Últimos 30 días'], ['mes', 'Este mes'], ['mes_anterior', 'Mes anterior'], ['90', 'Últimos 90 días']];
+  const max = d.embudo[0].cantidad || 1;
+  const fechaCorta = (f) => f.split('-').reverse().join('-');
+  const cifra = (n, t, extra = '') => `<div class="cifra"><strong>${n ?? '—'}</strong><span>${t}</span>${extra ? `<small>${extra}</small>` : ''}</div>`;
+  const a = d.actividad;
+  return layout(
+    'Indicadores',
+    `<section class="tarjeta">
+      <div class="titulo-seccion"><div><h1>Indicadores comerciales</h1><span class="nota">${esc(fechaCorta(d.periodo.desde))} al ${esc(fechaCorta(d.periodo.hasta))}</span></div>
+        <nav class="periodos">${periodos.map(([k, t]) => `<a class="boton chico ${periodo.clave === k ? 'primario' : ''}" href="/admin/indicadores?periodo=${k}">${t}</a>`).join('')}</nav></div>
+      <h2>Embudo de las postulaciones del período</h2>
+      <p class="nota">Cada interesado que postuló en el período, hasta dónde llegó.</p>
+      <div class="embudo">${d.embudo
+        .map(
+          (e, i) => `<div class="etapa"><span class="nombre">${esc(e.etapa)}</span>
+            <div class="emb-barra"><div class="emb-relleno" style="width:${Math.max(2, Math.round((e.cantidad / max) * 100))}%"></div></div>
+            <strong>${e.cantidad}</strong><span class="conv">${i ? (e.desdeAnterior === null ? '—' : `${e.desdeAnterior}% del paso anterior`) : ''}</span></div>`
+        )
+        .join('')}</div>
+    </section>
+    <section class="resumen-estados">
+      ${cifra(a.visitasAgendadas, 'Visitas del período', a.visitasManuales ? `${a.visitasManuales} ingresadas a mano` : '')}
+      ${cifra(a.asistencia === null ? '—' : `${a.asistencia}%`, 'Asistencia', `${a.noAsistio} no asistió`)}
+      ${cifra(a.realizadasContinua, 'Visitaron y continúan')}
+      ${cifra(d.tiempos.horasHastaAprobacion === null ? '—' : `${d.tiempos.horasHastaAprobacion} h`, 'Postulación → aprobación', 'mediana')}
+      ${cifra(d.tiempos.diasDeAprobacionAVisita === null ? '—' : `${d.tiempos.diasDeAprobacionAVisita} días`, 'Aprobación → visita', 'mediana')}
+    </section>
+    <section class="tarjeta">
+      <h2>Por portal de origen</h2>
+      ${
+        d.porPortal.length
+          ? `<div class="tabla-scroll"><table class="tabla"><thead><tr><th>Portal</th><th>Postularon</th><th>Aprobados</th><th>Visitaron</th><th>Continúan</th><th>Conversión</th></tr></thead><tbody>
+          ${d.porPortal.map((f) => `<tr><td>${esc(f.portal)}</td><td>${f.postularon}</td><td>${f.aprobados}</td><td>${f.visitaron}</td><td>${f.continuan}</td><td>${f.postularon ? `${Math.round((f.continuan / f.postularon) * 100)}%` : '—'}</td></tr>`).join('')}
+          </tbody></table></div>`
+          : '<p class="nota">No hubo postulaciones en el período.</p>'
+      }
+    </section>
+    <section class="tarjeta">
+      <h2>Actividad de visitas</h2>
+      <table class="ficha">
+        <tr><th>Postulaciones</th><td>${a.postulaciones}</td></tr>
+        <tr><th>Aprobados · rechazados</th><td>${a.aprobados} · ${a.rechazados}</td></tr>
+        <tr><th>Visitas agendadas</th><td>${a.visitasAgendadas}${a.visitasManuales ? ` (${a.visitasManuales} a mano)` : ''}</td></tr>
+        <tr><th>Confirmaron asistencia</th><td>${a.confirmaronAsistencia}</td></tr>
+        <tr><th>Visitó y continúa</th><td>${a.realizadasContinua}</td></tr>
+        <tr><th>No asistió</th><td>${a.noAsistio}</td></tr>
+        <tr><th>No continúa</th><td>${a.noContinua}${d.motivosNoContinua.length ? ` · ${esc(d.motivosNoContinua.map((m) => `${m.motivo}: ${m.cantidad}`).join(', '))}` : ''}</td></tr>
+        <tr><th>Canceladas</th><td>${a.canceladasPorInteresado} por el interesado · ${a.canceladasPorEquipo} por el equipo</td></tr>
+        <tr><th>Registradas en Breal</th><td>${a.registradasEnBreal} de ${a.visitasAgendadas}</td></tr>
+      </table>
+    </section>
+    <section class="tarjeta">
+      <h2>Pendientes hoy</h2>
+      <table class="ficha">
+        <tr><th>Documentos por revisar</th><td><a href="/admin?estado=documentos_recibidos#interesados">${d.pendientes.porRevisar}</a></td></tr>
+        <tr><th>Esperando agenda</th><td><a href="/admin#esperando-agenda">${d.pendientes.esperandoAgenda}</a></td></tr>
+        <tr><th>Visitas sin resultado</th><td><a href="/admin#post-visita">${d.pendientes.sinResultado}</a></td></tr>
+        <tr><th>Visitas sin registrar en Breal</th><td><a href="/admin#proximas">${d.pendientes.sinRegistrarEnBreal}</a></td></tr>
+      </table>
+    </section>`,
+    opcPanel(config, 'indicadores')
+  );
+}
+
 function formRecordarAgenda(lead) {
   if (lead.estado !== 'aprobado' || !lead.email) return '';
   return `<form method="post" action="/admin/lead/${lead.id}/recordar-agenda" class="form-recordar">
@@ -1090,4 +1158,4 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   );
 }
 
-module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, resultadoVisita, formularioDatos, confirmarEliminar, ingresar };
+module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, resultadoVisita, formularioDatos, indicadores, confirmarEliminar, ingresar };

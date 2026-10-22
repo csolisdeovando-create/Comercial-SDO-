@@ -1,3 +1,4 @@
+// SDO Comercial · Desarrollado por José Cano · Todos los derechos reservados (ver LICENSE)
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -13,6 +14,7 @@ const { interpretarUrl, leerPublicacion, resumenPropiedad, pareceLink, faltaDire
 const { crearLector } = require('./lectura');
 const { validarCertificado } = require('./validacionAfp');
 const { MOTIVOS_NO_CONTINUA } = require('./notificaciones');
+const { calcularIndicadores, detalleInteresados } = require('./indicadores');
 const { validarPersona, CAMPOS_PERSONA, filasPersona, PLAZOS_CAMBIO, camposFaltantes } = require('./personas');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
@@ -585,7 +587,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     // Mismo rechazo enviado de nuevo (doble clic, volver atrás): no se repite el aviso
     if (['rechazado', 'cerrado'].includes(lead.estado) && lead.motivo_rechazo === motivo) return irResultado(res, lead, firma, 'ya_rechazada');
     const reenviar = Boolean(req.body?.reenviar);
-    lead = db.actualizarLead(lead.id, { estado: reenviar ? 'rechazado' : 'cerrado', motivo_rechazo: motivo });
+    lead = db.actualizarLead(lead.id, { estado: reenviar ? 'rechazado' : 'cerrado', motivo_rechazo: motivo, rechazado_at: new Date().toISOString() });
     await notif.rechazo(lead, motivo, reenviar).catch((e) => console.error('[revision] envío rechazo:', e));
     irResultado(res, lead, firma, 'rechazada');
   });
@@ -824,9 +826,12 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   // ------------------------------------------------------------------
   const COOKIE = 'sdo_sesion';
   const DURACION_SESION = 30 * 24 * 3600; // segundos
-  const huellaClave = () => crypto.createHash('sha256').update(config.admin.clave).digest('hex').slice(0, 16);
-  // Incluye la clave: si se cambia ADMIN_CLAVE, todas las sesiones abiertas se cierran
-  const firmaSesion = (exp) => firmar(config.secret, 'sesion', config.admin.usuario, huellaClave(), exp);
+  // Usuarios del panel: el principal (ADMIN_USUARIO/ADMIN_CLAVE) y los de PANEL_USUARIOS, cada uno con su clave
+  const usuariosPanel = () => [{ usuario: config.admin.usuario, clave: config.admin.clave }, ...config.admin.adicionales].filter((u) => u.clave);
+  const usuarioPanel = (nombre) => usuariosPanel().find((u) => u.usuario === String(nombre || '').trim().toLowerCase() || u.usuario === nombre);
+  const huellaClave = (clave) => crypto.createHash('sha256').update(clave).digest('hex').slice(0, 16);
+  // Incluye la clave: si se cambia la clave de un usuario, sus sesiones abiertas se cierran
+  const firmaSesion = (u, exp) => firmar(config.secret, 'sesion', u.usuario, huellaClave(u.clave), exp);
 
   function leerCookies(req) {
     const out = {};
@@ -837,10 +842,14 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     return out;
   }
 
+  // Devuelve el usuario de la sesión o null. Cookie: <usuario en base64url>.<vence>.<firma>
+  // (las sesiones antiguas, <vence>.<firma>, son del usuario principal)
   function sesionValida(req) {
-    const [exp, firma] = String(leerCookies(req)[COOKIE] || '').split('.');
-    if (!exp || !firma || Number(exp) < Date.now() / 1000) return false;
-    return firmaCorrecta(config.secret, firma, 'sesion', config.admin.usuario, huellaClave(), exp);
+    const partes = String(leerCookies(req)[COOKIE] || '').split('.');
+    const [nombre, exp, firma] = partes.length === 2 ? [config.admin.usuario, ...partes] : [Buffer.from(partes[0] || '', 'base64url').toString(), partes[1], partes[2]];
+    const u = usuarioPanel(nombre);
+    if (!u || !exp || !firma || Number(exp) < Date.now() / 1000) return null;
+    return firmaCorrecta(config.secret, firma, 'sesion', u.usuario, huellaClave(u.clave), exp) ? u.usuario : null;
   }
 
   function igualSeguro(a, b) {
@@ -853,8 +862,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   function basicValido(req) {
     const [tipo, valor] = String(req.get('authorization') || '').split(' ');
     if (tipo !== 'Basic') return false;
-    const [u, ...c] = Buffer.from(valor || '', 'base64').toString().split(':');
-    return u === config.admin.usuario && igualSeguro(c.join(':'), config.admin.clave);
+    const [nombre, ...c] = Buffer.from(valor || '', 'base64').toString().split(':');
+    const u = usuarioPanel(nombre);
+    return u && igualSeguro(c.join(':'), u.clave) ? u.usuario : null;
   }
 
   const destinoSeguro = (v) => (/^\/admin(\/[^\s]*)?$/.test(String(v || '')) && !String(v).startsWith('//') ? String(v) : '/admin');
@@ -868,12 +878,13 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   app.post('/ingresar', limitar(10, 15 * 60 * 1000), express.urlencoded({ extended: false }), (req, res) => {
     if (!config.admin.clave) return res.status(503).send('Configura ADMIN_CLAVE para habilitar el panel.');
     const volver = destinoSeguro(req.body?.volver);
-    const ok = String(req.body?.usuario || '').trim() === config.admin.usuario && igualSeguro(req.body?.clave || '', config.admin.clave);
+    const u = usuarioPanel(req.body?.usuario);
+    const ok = Boolean(u) && igualSeguro(req.body?.clave || '', u.clave);
     if (!ok) {
       return res.status(401).send(vistas.ingresar({ volver, error: 'Usuario o clave incorrectos.', usuario: req.body?.usuario, config }));
     }
     const exp = Math.floor(Date.now() / 1000) + DURACION_SESION;
-    res.cookie(COOKIE, `${exp}.${firmaSesion(exp)}`, {
+    res.cookie(COOKIE, `${Buffer.from(u.usuario).toString('base64url')}.${exp}.${firmaSesion(u, exp)}`, {
       httpOnly: true,
       sameSite: 'lax',
       secure: req.secure,
@@ -890,7 +901,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
 
   function requiereAdmin(req, res, next) {
     if (!config.admin.clave) return res.status(503).send('Configura ADMIN_CLAVE para habilitar el panel.');
-    if (!sesionValida(req) && !basicValido(req)) {
+    req.usuarioPanel = sesionValida(req) || basicValido(req);
+    if (!req.usuarioPanel) {
       if (req.method === 'GET' || req.method === 'HEAD') {
         return res.redirect(303, `/ingresar?volver=${encodeURIComponent(req.originalUrl)}`);
       }
@@ -984,6 +996,38 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   const lunesDe = (fecha) => sumarDias(fecha, 1 - (new Date(`${fecha}T00:00:00Z`).getUTCDay() || 7));
   // Semanas entre la actual y la de `fecha` (para volver al calendario en la semana de la visita)
   const semanaDe = (fecha) => Math.round((Date.parse(lunesDe(fecha)) - Date.parse(lunesDe(hoyChile()))) / (7 * 864e5));
+
+  // Período de los indicadores: últimos 30 días (por defecto), este mes, mes anterior, últimos 90 días, o desde/hasta
+  function periodoIndicadores(q) {
+    const hoy = hoyChile();
+    const fecha = (x) => (/^\d{4}-\d{2}-\d{2}$/.test(x || '') ? x : null);
+    if (fecha(q.desde) && fecha(q.hasta)) return { clave: 'rango', desde: q.desde, hasta: q.hasta };
+    const inicioMes = `${hoy.slice(0, 7)}-01`;
+    if (q.periodo === 'mes') return { clave: 'mes', desde: inicioMes, hasta: hoy };
+    if (q.periodo === 'mes_anterior') {
+      const fin = sumarDias(inicioMes, -1);
+      return { clave: 'mes_anterior', desde: `${fin.slice(0, 7)}-01`, hasta: fin };
+    }
+    if (q.periodo === '90') return { clave: '90', desde: sumarDias(hoy, -89), hasta: hoy };
+    return { clave: '30', desde: sumarDias(hoy, -29), hasta: hoy };
+  }
+  const indicadores = (p) => calcularIndicadores({ leads: db.todosLosLeads(), visitas: db.todasLasVisitas(), desde: p.desde, hasta: p.hasta, hoy: hoyChile() });
+
+  app.get('/admin/indicadores', (req, res) => {
+    const p = periodoIndicadores(req.query);
+    res.send(vistas.indicadores({ datos: indicadores(p), periodo: p, config }));
+  });
+
+  // Indicadores en JSON para el panel de Cristian (clave en INDICADORES_TOKEN; ?detalle=1 agrega una fila por interesado)
+  app.get('/api/indicadores', limitar(120, 60 * 60 * 1000), (req, res) => {
+    const token = String(req.get('authorization') || '').replace(/^Bearer\s+/i, '') || String(req.query.token || '');
+    if (!config.indicadoresToken) return res.sendStatus(404);
+    if (!igualSeguro(token, config.indicadoresToken)) return res.status(401).json({ error: 'token inválido' });
+    const p = periodoIndicadores(req.query);
+    const datos = indicadores(p);
+    if (req.query.detalle === '1') datos.interesados = detalleInteresados({ leads: db.todosLosLeads(), visitas: db.todasLasVisitas(), desde: p.desde, hasta: p.hasta });
+    res.set('Cache-Control', 'no-store').json({ generado: new Date().toISOString(), ...datos });
+  });
 
   app.get('/admin/calendario', (req, res) => {
     const desplazamiento = Math.max(-52, Math.min(52, parseInt(req.query.semana, 10) || 0));

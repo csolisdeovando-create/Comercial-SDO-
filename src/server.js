@@ -1,3 +1,4 @@
+// SDO Comercial · Desarrollado por José Cano · Todos los derechos reservados (ver LICENSE)
 const path = require('node:path');
 const { cargarConfig } = require('./config');
 const { abrirDB } = require('./db');

@@ -26,6 +26,10 @@ services:
         value: admin
       - key: ADMIN_CLAVE
         sync: false
+      - key: PANEL_USUARIOS
+        sync: false          # ej: cristian:clave (usuarios adicionales del panel)
+      - key: INDICADORES_TOKEN
+        sync: false          # clave para /api/indicadores (panel de Cristian)
       - key: SMTP_HOST
         value: smtp.gmail.com
       - key: SMTP_PORT

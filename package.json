@@ -18,7 +18,8 @@
     "type": "git",
     "url": "git+https://github.com/josecano-app/Comercial-SDO-.git"
   },
-  "license": "UNLICENSED",
+  "author": "José Cano",
+  "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "@anthropic-ai/sdk": "^1.1.0",
     "archiver": "^7.0.1",

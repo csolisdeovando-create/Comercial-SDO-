@@ -115,6 +115,7 @@ function migrar(db) {
   if (!leads.includes('aviso_agenda_at')) db.exec('ALTER TABLE leads ADD COLUMN aviso_agenda_at TEXT');
   if (!leads.includes('avisos_agenda')) db.exec('ALTER TABLE leads ADD COLUMN avisos_agenda INTEGER DEFAULT 0');
   if (!leads.includes('datos_pedidos_at')) db.exec('ALTER TABLE leads ADD COLUMN datos_pedidos_at TEXT');
+  if (!leads.includes('rechazado_at')) db.exec('ALTER TABLE leads ADD COLUMN rechazado_at TEXT');
   // Persona que complementa renta o es aval, y datos personales completos de ambos
   const personales = ['doc_tipo', 'nacionalidad', 'fecha_nacimiento', 'estado_civil', 'profesion', 'direccion_actual', 'comuna'];
   for (const col of [
@@ -312,6 +313,8 @@ function crearRepositorio(db) {
         .all(desdeFecha, hastaFecha),
     marcarResultadoPedido: (visitaId) => db.prepare(`UPDATE visitas SET resultado_pedido_at = datetime('now') WHERE id = ?`).run(visitaId),
     visitaPorId: (id) => db.prepare('SELECT * FROM visitas WHERE id = ?').get(id),
+    todasLasVisitas: () => db.prepare('SELECT * FROM visitas ORDER BY id').all(),
+    todosLosLeads: () => db.prepare('SELECT * FROM leads ORDER BY id').all(),
     marcarBreal: (visitaId, registrada) =>
       db.prepare(`UPDATE visitas SET breal_at = ${registrada ? "datetime('now')" : 'NULL'} WHERE id = ?`).run(visitaId),
     marcarAvisoAgenda: (leadId) =>

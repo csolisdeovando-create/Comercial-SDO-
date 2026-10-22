@@ -1363,3 +1363,62 @@ test('postulación: la relación de quien complementa renta o es aval es obligat
   assert.strictEqual(r.status, 422);
   assert.match(await r.text(), /Indica qué relación tiene quien es aval/);
 });
+
+test('usuarios del panel: Cristian entra con su propio usuario y clave', async (t) => {
+  const ctx = await preparar({ PANEL_USUARIOS: 'cristian:clave-de-cristian' });
+  t.after(() => ctx.server.close());
+  const entrar = (usuario, clave) => fetch(`${ctx.url}/ingresar`, { method: 'POST', redirect: 'manual', body: new URLSearchParams({ usuario, clave, volver: '/admin' }) });
+  assert.strictEqual((await entrar('cristian', 'otra')).status, 401);
+  assert.strictEqual((await entrar('admin', 'clave-de-cristian')).status, 401, 'cada uno con su clave');
+  const r = await entrar('Cristian', 'clave-de-cristian');
+  assert.strictEqual(r.status, 303);
+  const galleta = r.headers.get('set-cookie').split(';')[0];
+  const panel = await fetch(`${ctx.url}/admin`, { headers: { cookie: galleta } });
+  assert.strictEqual(panel.status, 200);
+  assert.match(await panel.text(), /Desarrollado por José Cano/);
+  // El usuario principal sigue igual
+  assert.strictEqual((await entrar('admin', 'clave')).status, 303);
+  // Una cookie alterada (otro usuario con la firma de Cristian) no sirve
+  const [, exp, firma] = galleta.split('=')[1].split('.');
+  const falsa = `sdo_sesion=${Buffer.from('admin').toString('base64url')}.${exp}.${firma}`;
+  assert.strictEqual((await fetch(`${ctx.url}/admin`, { headers: { cookie: falsa }, redirect: 'manual' })).status, 303);
+});
+
+test('indicadores: embudo, actividad y JSON con clave para el panel de Cristian', async (t) => {
+  const ctx = await preparar({ INDICADORES_TOKEN: 'token-kpi-123' });
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
+  const mk = (n, extra) => ctx.db.crearLead({ telefono: `5690000000${n}`, nombre: `Persona ${n}`, email: `p${n}@x.cl`, portal: n % 2 ? 'Yapo' : 'Mercado Libre', documentos_at: '2026-10-10T12:00:00Z', ...extra });
+  const a = mk(1, { aprobado_at: '2026-10-11T12:00:00Z', estado: 'visitado' });
+  const b = mk(2, { aprobado_at: '2026-10-12T12:00:00Z', estado: 'no_asistio' });
+  mk(3, { estado: 'documentos_recibidos' });
+  mk(4, { aprobado_at: '2026-10-12T12:00:00Z', estado: 'aprobado' });
+  const va = ctx.db.crearVisita(a.id, '2026-10-13', 11);
+  ctx.db.registrarResultadoVisita(va.id, 'realizada', 'Le gustó');
+  ctx.db.marcarBreal(va.id, true);
+  const vb = ctx.db.crearVisita(b.id, '2026-10-14', 15);
+  ctx.db.registrarResultadoVisita(vb.id, 'no_asistio', '');
+
+  const html = await (await fetch(`${ctx.url}/admin/indicadores`, { headers: h })).text();
+  assert.match(html, /Embudo de las postulaciones del período/);
+  assert.match(html, /Postularon<\/span>[\s\S]*?<strong>4<\/strong>/);
+
+  assert.strictEqual((await fetch(`${ctx.url}/api/indicadores`)).status, 401);
+  const r = await fetch(`${ctx.url}/api/indicadores?detalle=1`, { headers: { authorization: 'Bearer token-kpi-123' } });
+  assert.strictEqual(r.status, 200);
+  const d = await r.json();
+  assert.deepStrictEqual(d.embudo.map((e) => e.cantidad), [4, 3, 2, 1, 1]);
+  assert.strictEqual(d.embudo.at(1).desdeAnterior, 75);
+  assert.strictEqual(d.actividad.noAsistio, 1);
+  assert.strictEqual(d.actividad.asistencia, 50);
+  assert.strictEqual(d.actividad.registradasEnBreal, 1);
+  assert.strictEqual(d.tiempos.horasHastaAprobacion, 48);
+  assert.deepStrictEqual(d.porPortal.map((p) => [p.portal, p.postularon, p.continuan]), [['Yapo', 2, 1], ['Mercado Libre', 2, 0]]);
+  assert.strictEqual(d.pendientes.porRevisar, 1);
+  const fila = d.interesados.find((x) => x.id === a.id);
+  assert.deepStrictEqual([fila.telefono, fila.visita.resultado, fila.visita.registradaEnBreal], ['+56900000001', 'realizada', true]);
+  // Sin clave configurada, el endpoint no existe
+  const sin = await preparar();
+  t.after(() => sin.server.close());
+  assert.strictEqual((await fetch(`${sin.url}/api/indicadores?token=x`)).status, 404);
+});

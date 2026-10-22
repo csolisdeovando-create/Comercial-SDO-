@@ -88,7 +88,14 @@ function cargarConfig(env = process.env) {
     admin: {
       usuario: env.ADMIN_USUARIO || 'admin',
       clave: env.ADMIN_CLAVE || '',
+      // Usuarios adicionales del panel, cada uno con su clave: "cristian:clave1,barbara:clave2"
+      adicionales: lista(env.PANEL_USUARIOS, '')
+        .filter((par) => par.indexOf(':') > 0)
+        .map((par) => ({ usuario: par.slice(0, par.indexOf(':')).trim().toLowerCase(), clave: par.slice(par.indexOf(':') + 1) }))
+        .filter((u) => u.usuario && u.clave),
     },
+    // Clave para leer los indicadores en JSON desde otro sistema (panel de Cristian). Vacía = desactivado.
+    indicadoresToken: env.INDICADORES_TOKEN || '',
 
     archivos: {
       maxMB: Number(env.ARCHIVO_MAX_MB || 30),
