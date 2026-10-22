@@ -2,6 +2,8 @@ const { esc, formatearRut, tamanoLegible } = require('./utils');
 const { REQUISITOS, nombreRequisito } = require('./requisitos');
 const { formularioPersona, filasPersona, PLAZOS_CAMBIO } = require('./personas');
 const { faltaDireccion } = require('./publicacion');
+const { evaluarRenta, alertasAfp } = require('./evaluacionRenta');
+const { fechaLegible } = require('./personas');
 
 const PLAZO_CORTO = { '5_dias': '5 días', '15_dias': '15 días', '1_mes': '1 mes', mas_1_mes: '+1 mes' };
 const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSemana, textoDias } = require('./agenda');
@@ -298,6 +300,19 @@ const mismaDireccion = (lead) => {
   return p.length >= 6 && d.length >= 6 && (p.includes(d) || d.includes(p));
 };
 
+// Etiqueta del panel: si las liquidaciones cumplen 2,5 veces el arriendo
+function etiquetaRenta(l) {
+  if (!l.revision_datos || !l.valor_arriendo) return '';
+  let r = null;
+  try {
+    r = resumenRenta(l, JSON.parse(l.revision_datos));
+  } catch {
+    return '';
+  }
+  if (!r || r.cumple === null) return '';
+  return r.cumple ? ' <span class="tag-renta ok" title="Cumple 2,5 veces el arriendo">💰 Cumple</span>' : ' <span class="tag-renta mal" title="No cumple 2,5 veces el arriendo">💰 No cumple</span>';
+}
+
 const etiquetaComp = (lead) => (lead.comp_rol === 'aval' ? 'Aval' : 'Complementa renta');
 
 function fichaLead(lead) {
@@ -420,7 +435,7 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
               .map(
                 (l) => `<tr>
           <td class="col-id">${l.id}</td>
-          <td class="col-principal"><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}${PLAZO_CORTO[l.plazo_cambio] ? ` <span class="tag-plazo plazo-${l.plazo_cambio}" title="${PLAZOS_CAMBIO[l.plazo_cambio]}">🚚 ${PLAZO_CORTO[l.plazo_cambio]}</span>` : ''}<br><small>${esc(l.email || '')}</small>
+          <td class="col-principal"><a href="/admin/lead/${l.id}"><strong>${esc(l.nombre || 'Sin nombre aún')}</strong></a>${l.complementa ? ' <span class="tag-comp" title="' + (l.comp_rol === 'aval' ? 'Aval: ' : 'Complementa renta: ') + esc(l.comp_nombre || '') + '">' + (l.comp_rol === 'aval' ? '+ aval' : '+ complemento') + '</span>' : ''}${etiquetaRenta(l)}${PLAZO_CORTO[l.plazo_cambio] ? ` <span class="tag-plazo plazo-${l.plazo_cambio}" title="${PLAZOS_CAMBIO[l.plazo_cambio]}">🚚 ${PLAZO_CORTO[l.plazo_cambio]}</span>` : ''}<br><small>${esc(l.email || '')}</small>
             ${l.duplicados ? `<br><span class="aviso-dup" title="Mismo teléfono o RUT que #${esc(l.duplicados)}">⚠️ Posible duplicado de ${l.duplicados.split(',').map((d) => `<a href="/admin/lead/${esc(d)}">#${esc(d)}</a>`).join(', ')}</span>` : ''}</td>
           <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>
@@ -438,7 +453,7 @@ function panel({ leads, todos, visitas, hoy, filtros = {}, eliminado, config }) 
   );
 }
 
-function fichaAdmin({ lead, documentos, visita, disponibles, firma, aviso, config }) {
+function fichaAdmin({ lead, documentos, visita, revisionDocs = null, disponibles, firma, aviso, config }) {
   const requisitos = REQUISITOS[lead.tipo]?.documentos || [];
   const grupos = requisitos.map((r, i) => ({ ...r, n: i + 1, docs: documentos.filter((d) => d.requisito === r.campo) }));
   const reqComp = lead.complementa ? (REQUISITOS[lead.comp_tipo]?.documentos || []).map((r) => ({ ...r, campo: `comp_${r.campo}` })) : [];
@@ -508,6 +523,8 @@ function fichaAdmin({ lead, documentos, visita, disponibles, firma, aviso, confi
       }
     </section>
 
+    ${seccionRevisionDocs(lead, revisionDocs)}
+
     ${seccionVisita(lead, visita, disponibles)}
 
     <section class="tarjeta zona-peligro">
@@ -543,6 +560,95 @@ function formAgendar(lead, disponibles, reagendar) {
       </div>
       <label class="check"><input type="checkbox" name="avisar" value="1" checked> Avisar al interesado (correo y WhatsApp) con la ${reagendar ? 'nueva ' : ''}hora</label>
     </form>`;
+}
+
+const pesos = (n) => (Number.isFinite(n) ? `$${Math.round(n).toLocaleString('es-CL')}` : '—');
+const mesLegible = (p) => {
+  const [y, m] = String(p).split('-').map(Number);
+  return m ? `${['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'][m - 1]} ${y}` : p;
+};
+
+// Resultado de la lectura automática de liquidaciones y AFP, con el cálculo de 2,5 veces el arriendo
+function resumenRenta(lead, datos) {
+  if (!datos?.titular) return null;
+  return evaluarRenta({
+    valorArriendo: lead.valor_arriendo,
+    titular: { liquidaciones: datos.titular.liquidaciones?.datos?.liquidaciones || [], rut: lead.rut },
+    comp: datos.comp ? { liquidaciones: datos.comp.liquidaciones?.datos?.liquidaciones || [], rut: lead.comp_rut } : null,
+  });
+}
+
+function bloqueAfp(titulo, persona, rut) {
+  if (!persona?.afp) return '';
+  if (!persona.afp.ok) return `<div class="afp-caja"><h3>${titulo}</h3><p class="falta">No se pudo leer: ${esc(persona.afp.error)}</p></div>`;
+  const a = persona.afp.datos;
+  const v = persona.validacionAfp || {};
+  const estado = {
+    valido: `<span class="sello ok">✅ Válido en AFP ${esc(a.afp)}</span>`,
+    no_reconocido: `<span class="sello mal">⚠️ AFP ${esc(a.afp)} no lo reconoció</span>`,
+    no_verificado: '<span class="sello medio">⏳ No se pudo consultar ahora</span>',
+    manual: '<span class="sello medio">👀 Validar a mano</span>',
+  }[v.estado] || '';
+  const alertas = alertasAfp(a, rut);
+  return `<div class="afp-caja"><h3>${titulo}</h3>
+      <p>${estado}</p>
+      <table class="ficha">
+        <tr><th>AFP</th><td>${esc(a.afp)}</td></tr>
+        <tr><th>Folio</th><td>${a.folio ? `<code>${esc(a.folio)}</code>` : '<span class="falta">No se leyó</span>'}</td></tr>
+        ${a.fecha_emision ? `<tr><th>Emitido</th><td>${esc(fechaLegible(a.fecha_emision))}</td></tr>` : ''}
+        ${a.ultimo_periodo_cotizado ? `<tr><th>Última cotización</th><td>${esc(mesLegible(a.ultimo_periodo_cotizado))}${a.empleador_actual ? ` · ${esc(a.empleador_actual)}` : ''}</td></tr>` : ''}
+      </table>
+      ${v.detalle ? `<p class="nota">${esc(v.detalle)}${v.mismoArchivo === true ? ' El PDF subido es idéntico al original de la AFP.' : v.mismoArchivo === false ? ' Ojo: el PDF subido no es idéntico al que entrega la AFP (puede ser otra descarga o estar editado): compara los datos.' : ''}</p>` : ''}
+      ${alertas.length ? `<ul class="alertas">${alertas.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+      ${v.validador && v.estado !== 'valido' ? `<a class="boton chico" href="${esc(v.validador)}" target="_blank" rel="noopener noreferrer">Abrir validador de AFP ${esc(a.afp)} ↗</a> <span class="nota">Copia el folio${a.rut_afiliado ? ` y el RUT ${esc(a.rut_afiliado)}` : ''}.</span>` : ''}
+    </div>`;
+}
+
+function seccionRevisionDocs(lead, revision) {
+  const reintentar = `<form method="post" action="/admin/lead/${lead.id}/revisar" class="en-linea"><button class="boton chico">🔁 Volver a leer documentos</button></form>`;
+  const cabecera = (extra = '') => `<div class="titulo-seccion"><div><h1>🤖 Revisión automática</h1><span class="nota">Liquidaciones (2,5 veces el arriendo) y certificado de AFP</span></div>${extra}</div>`;
+  if (lead.tipo !== 'dependiente' && !(lead.complementa && lead.comp_tipo === 'dependiente')) return '';
+  if (!revision) return `<section class="tarjeta" id="revision-docs">${cabecera(reintentar)}<p class="nota">Aún no se leen los documentos.</p></section>`;
+  if (revision.estado === 'sin_config') {
+    return `<section class="tarjeta" id="revision-docs">${cabecera()}<p class="nota">La lectura automática no está activada: falta la clave ANTHROPIC_API_KEY en Render.</p></section>`;
+  }
+  if (revision.estado === 'leyendo') return `<section class="tarjeta" id="revision-docs">${cabecera()}<p>⏳ Leyendo los documentos… recarga la página en un minuto.</p></section>`;
+  if (revision.estado === 'error' && !revision.datos) {
+    return `<section class="tarjeta" id="revision-docs">${cabecera(reintentar)}<p class="falta">No se pudieron leer: ${esc(revision.error || '')}</p></section>`;
+  }
+  const d = revision.datos;
+  const r = resumenRenta(lead, d);
+  const hayComp = Boolean(d.comp?.liquidaciones);
+  const sello = !r ? '' : r.cumple === true ? '<span class="sello ok">✅ Cumple 2,5 veces el arriendo en las 3 liquidaciones</span>' : r.cumple === false ? '<span class="sello mal">❌ No cumple 2,5 veces el arriendo</span>' : '<span class="sello medio">Falta el valor del arriendo</span>';
+  const errorLiq = [d.titular?.liquidaciones, d.comp?.liquidaciones].filter((x) => x && !x.ok).map((x) => x.error);
+  return `<section class="tarjeta" id="revision-docs">
+      ${cabecera(reintentar)}
+      <form method="post" action="/admin/lead/${lead.id}/arriendo" class="form-arriendo">
+        <label>Valor del arriendo (mensual)<input name="valor_arriendo" inputmode="numeric" required placeholder="Ej: 450000" value="${lead.valor_arriendo || ''}"></label>
+        <button class="boton primario">Calcular</button>
+        ${r?.requerido ? `<span class="nota">Renta líquida requerida: <strong>${pesos(r.requerido)}</strong> por mes${hayComp ? ' (sumando a quien complementa)' : ''}</span>` : ''}
+      </form>
+      ${lead.url_publicacion ? `<p class="nota">El precio está en el <a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">aviso de la propiedad ↗</a>.</p>` : ''}
+      <p>${sello}</p>
+      ${
+        r?.meses.length
+          ? `<div class="tabla-scroll"><table class="tabla tabla-renta"><thead><tr><th>Mes</th><th>Empleador</th><th>Líquido</th>${hayComp ? '<th>Complemento</th><th>Total</th>' : ''}<th></th></tr></thead><tbody>
+          ${r.meses
+            .map(
+              (m) => `<tr><td>${esc(mesLegible(m.periodo))}</td><td>${esc(m.empleador || '—')}</td><td>${pesos(m.titular)}</td>${hayComp ? `<td>${pesos(m.comp)}</td><td><strong>${pesos(m.total)}</strong></td>` : ''}<td>${m.cumple === true ? '✅' : m.cumple === false ? `❌ faltan ${pesos(r.requerido - m.total)}` : ''}</td></tr>`
+            )
+            .join('')}</tbody></table></div>`
+          : ''
+      }
+      ${errorLiq.length ? `<p class="falta">No se pudieron leer las liquidaciones: ${esc(errorLiq.join(' · '))}</p>` : ''}
+      ${r?.alertas.length ? `<ul class="alertas">${r.alertas.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+      ${d.titular?.liquidaciones?.datos?.observaciones ? `<p class="nota">Observación: ${esc(d.titular.liquidaciones.datos.observaciones)}</p>` : ''}
+      <div class="grilla-afp">
+        ${bloqueAfp('Certificado AFP', d.titular, lead.rut)}
+        ${bloqueAfp(`Certificado AFP · ${etiquetaComp(lead)}`, d.comp, lead.comp_rut)}
+      </div>
+      <p class="nota">Leído automáticamente el ${esc(new Date(d.leido_at).toLocaleString('es-CL', { timeZone: 'America/Santiago', dateStyle: 'short', timeStyle: 'short' }))} · Es una ayuda: confirma con los documentos antes de aprobar.</p>
+    </section>`;
 }
 
 function formPropiedad(lead, visita) {

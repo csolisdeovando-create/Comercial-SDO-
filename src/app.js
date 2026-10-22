@@ -10,6 +10,8 @@ const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDi
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
 const { interpretarUrl, leerPublicacion, resumenPropiedad, pareceLink, faltaDireccion } = require('./publicacion');
+const { crearLector } = require('./lectura');
+const { validarCertificado } = require('./validacionAfp');
 const { validarPersona, CAMPOS_PERSONA, filasPersona, PLAZOS_CAMBIO } = require('./personas');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
@@ -17,13 +19,57 @@ const vistas = require('./views');
 const MIMES_PERMITIDOS = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif))$/;
 const EXT_PERMITIDAS = /\.(pdf|jpe?g|png|webp|heic|heif)$/i;
 
-function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
+function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lector = null, fetchAfp = fetch }) {
   const app = express();
   const notif = crearNotificaciones({ config, mailer, whatsapp, db });
   const cfgAgenda = { ...config.agenda, zonaHoraria: config.zonaHoraria };
   const opcVista = { empresa: config.empresa.nombre };
   const tareas = new Set(); // procesos en segundo plano (útil para pruebas)
   app.locals.esperarTareas = () => Promise.allSettled([...tareas]);
+  const enSegundoPlano = (promesa) => {
+    tareas.add(promesa);
+    promesa.finally(() => tareas.delete(promesa));
+  };
+
+  // Lectura automática de liquidaciones y certificado AFP (titular y quien complementa, si es dependiente)
+  const lectorDocs = lector || crearLector({ apiKey: config.anthropicApiKey });
+  async function revisarDocumentos(leadId) {
+    const lead = db.leadPorId(leadId);
+    if (!lead) return;
+    if (!lectorDocs.activo) return db.guardarRevision(lead.id, { estado: 'sin_config' });
+    db.guardarRevision(lead.id, { estado: 'leyendo' });
+    const docs = db.documentosDeLead(lead.id);
+    const de = (campo) => docs.filter((d) => d.requisito === campo);
+    const persona = async (prefijo, tipo, rut) => {
+      if (tipo !== 'dependiente') return null;
+      const [liq, afp] = await Promise.all([
+        de(`${prefijo}liquidaciones`).length ? lectorDocs.leerLiquidaciones(de(`${prefijo}liquidaciones`)) : null,
+        de(`${prefijo}afp`).length ? lectorDocs.leerCertificadoAfp(de(`${prefijo}afp`)) : null,
+      ]);
+      let validacion = null;
+      if (afp?.ok) {
+        const archivo = de(`${prefijo}afp`).length === 1 && fs.existsSync(de(`${prefijo}afp`)[0].ruta) ? fs.readFileSync(de(`${prefijo}afp`)[0].ruta) : null;
+        const { pdfOriginal, ...resto } = await validarCertificado(
+          { afp: afp.datos.afp, rut: afp.datos.rut_afiliado || rut, folio: afp.datos.folio, archivo },
+          { fetchFn: fetchAfp }
+        );
+        validacion = resto;
+      }
+      return { liquidaciones: liq, afp, validacionAfp: validacion };
+    };
+    try {
+      const datos = {
+        titular: await persona('', lead.tipo, lead.rut),
+        comp: lead.complementa ? await persona(PREFIJO_COMP, lead.comp_tipo, lead.comp_rut) : null,
+        leido_at: new Date().toISOString(),
+      };
+      db.guardarRevision(lead.id, { estado: 'listo', datos });
+    } catch (e) {
+      console.error('[revision] lectura automática falló:', e.message);
+      db.guardarRevision(lead.id, { estado: 'error', error: e.message.slice(0, 300) });
+    }
+  }
+  const programarRevision = (leadId) => enSegundoPlano(revisarDocumentos(leadId).catch((e) => console.error('[revision]', e)));
 
   // Recordatorio por correo (y WhatsApp si está conectado) el día anterior a la visita, desde las 10:00
   app.locals.enviarRecordatorios = async () => {
@@ -380,6 +426,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         }
       }
       borrarTemporales(req); // archivos de campos que no correspondían al tipo elegido
+      programarRevision(lead.id); // lee liquidaciones y AFP sin hacer esperar al interesado
 
       try {
         await notif.documentosRecibidos(lead, documentos, { actualizacion });
@@ -889,6 +936,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
         lead,
         documentos: db.documentosDeLead(lead.id),
         visita: db.ultimaVisita(lead.id),
+        revisionDocs: db.revisionDe(lead.id),
         disponibles: calendarioDisponible(),
         firma: notif.firmaRevision(lead.id),
         aviso: AVISOS[req.query.ok] || null,
@@ -955,6 +1003,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
     bloque_ocupado: 'Ese horario ya está ocupado o bloqueado. Elige otro.',
     bloque_invalido: 'Selecciona un horario válido.',
     propiedad: 'Dirección de la propiedad guardada.',
+    arriendo: 'Valor del arriendo guardado. Se recalculó el requisito de renta.',
+    arriendo_invalido: 'Ingresa el valor mensual del arriendo en pesos (ej: 450000).',
+    revisando: 'Leyendo los documentos… recarga la página en un minuto.',
     propiedad_link: 'No se guardó: en la dirección va la calle y número, no el link del aviso.',
     propiedad_evento: 'Dirección de la propiedad guardada. Se actualizó el evento de la visita en el calendario del equipo.',
   };
@@ -999,6 +1050,21 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date() }) {
       .visitaAgendada(lead, r.visita, { anterior: r.anterior, porEquipo: true, avisarInteresado: avisar })
       .catch((e) => console.error('[panel] agendar visita:', e));
     res.redirect(303, `/admin/lead/${lead.id}?ok=${r.anterior ? 'reagendada' : 'agendada'}${avisar ? '_aviso' : ''}#visita`);
+  });
+
+  // Valor del arriendo (base del requisito de renta) y volver a leer los documentos
+  app.post('/admin/lead/:id/arriendo', formAdmin, (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    const valor = Number(String(req.body?.valor_arriendo || '').replace(/\D/g, ''));
+    db.actualizarLead(lead.id, { valor_arriendo: valor >= 50000 && valor <= 50000000 ? valor : null });
+    res.redirect(303, `/admin/lead/${lead.id}?ok=${valor ? 'arriendo' : 'arriendo_invalido'}#revision-docs`);
+  });
+  app.post('/admin/lead/:id/revisar', formAdmin, (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    if (db.revisionDe(lead.id)?.estado !== 'leyendo') programarRevision(lead.id);
+    res.redirect(303, `/admin/lead/${lead.id}?ok=revisando#revision-docs`);
   });
 
   // Corregir la dirección de la propiedad a visitar (se actualiza el evento del calendario del equipo)

@@ -22,6 +22,8 @@ function cargarConfig(env = process.env) {
     port: Number(env.PORT || 3000),
     baseUrl: (env.BASE_URL || `http://localhost:${env.PORT || 3000}`).replace(/\/$/, ''),
     secret: env.APP_SECRET || 'cambia-esta-clave-secreta',
+    // Lectura automática de liquidaciones y certificados AFP (Claude). Sin clave, la revisión queda manual.
+    anthropicApiKey: env.ANTHROPIC_API_KEY || '',
     dataDir,
     uploadsDir: path.join(dataDir, 'uploads'),
     zonaHoraria: env.ZONA_HORARIA || 'America/Santiago',

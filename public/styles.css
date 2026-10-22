@@ -350,3 +350,20 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 .form-agendar { grid-template-columns: minmax(0, 1fr); }
 .form-agendar .fila-agendar select { width: 100%; }
 .visita .prop.falta { color: var(--rojo); }
+
+/* Revisión automática de documentos */
+.en-linea { display: inline; margin: 0; }
+.form-arriendo { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; margin: 6px 0 4px; }
+.form-arriendo label { margin: 0; flex: 0 1 220px; }
+.sello { display: inline-block; font-weight: 700; padding: 6px 12px; border-radius: 8px; font-size: 14px; }
+.sello.ok { background: var(--verde-claro); color: var(--verde-texto); }
+.sello.mal { background: #fbeceb; color: #8c2a20; }
+.sello.medio { background: #fff3d6; color: #6b4600; }
+.alertas { margin: 8px 0; padding-left: 20px; color: #6b4600; font-size: 14px; }
+.grilla-afp { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+.afp-caja { border: 1px solid var(--borde); border-radius: 10px; padding: 12px; }
+.afp-caja h3 { margin: 0 0 6px; font-size: 16px; }
+.afp-caja code { font-size: 13px; overflow-wrap: anywhere; }
+.tag-renta { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 99px; white-space: nowrap; }
+.tag-renta.ok { background: var(--verde-claro); color: var(--verde-texto); }
+.tag-renta.mal { background: #fbeceb; color: #8c2a20; }

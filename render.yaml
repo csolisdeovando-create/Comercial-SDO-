@@ -44,5 +44,7 @@ services:
         sync: false
       - key: WHATSAPP_APP_SECRET
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false          # lectura automática de liquidaciones y certificados AFP
       - key: AGENDA_AUTOMATICA
         value: "false"

@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS bloqueos (
 );
 CREATE INDEX IF NOT EXISTS idx_bloqueos_fecha ON bloqueos(fecha);
 
+-- Lectura automática de liquidaciones y certificado de AFP (una fila por interesado)
+CREATE TABLE IF NOT EXISTS revisiones (
+  lead_id INTEGER PRIMARY KEY REFERENCES leads(id),
+  estado TEXT NOT NULL,      -- leyendo | listo | error | sin_config
+  datos TEXT,                -- JSON con lo leído de cada documento
+  error TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS mensajes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   lead_id INTEGER REFERENCES leads(id),
@@ -92,6 +101,8 @@ function migrar(db) {
   const leads = columnas('leads');
   if (!leads.includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
   if (!leads.includes('plazo_cambio')) db.exec('ALTER TABLE leads ADD COLUMN plazo_cambio TEXT');
+  // Valor mensual del arriendo (lo ingresa el equipo): base del requisito de renta de 2,5 veces
+  if (!leads.includes('valor_arriendo')) db.exec('ALTER TABLE leads ADD COLUMN valor_arriendo INTEGER');
   // Persona que complementa renta o es aval, y datos personales completos de ambos
   const personales = ['doc_tipo', 'nacionalidad', 'fecha_nacimiento', 'estado_civil', 'profesion', 'direccion_actual', 'comuna'];
   for (const col of [
@@ -163,10 +174,24 @@ function crearRepositorio(db) {
               ORDER BY v.id DESC LIMIT 1) AS visita,
              (SELECT resultado FROM visitas v WHERE v.lead_id = l.id AND v.estado = 'confirmada'
               ORDER BY v.id DESC LIMIT 1) AS resultado_visita,
+             (SELECT datos FROM revisiones r WHERE r.lead_id = l.id AND r.estado = 'listo') AS revision_datos,
              (SELECT GROUP_CONCAT(o.id) FROM leads o WHERE o.id <> l.id AND (o.telefono = l.telefono OR (l.rut IS NOT NULL AND o.rut = l.rut))) AS duplicados
            FROM leads l ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`
         )
         .all(limite),
+
+    revisionDe: (leadId) => {
+      const r = db.prepare('SELECT * FROM revisiones WHERE lead_id = ?').get(leadId);
+      return r ? { ...r, datos: r.datos ? JSON.parse(r.datos) : null } : null;
+    },
+    guardarRevision: (leadId, { estado, datos = null, error = null }) =>
+      db
+        .prepare(
+          `INSERT INTO revisiones (lead_id, estado, datos, error, updated_at) VALUES (?,?,?,?,datetime('now'))
+           ON CONFLICT(lead_id) DO UPDATE SET estado = excluded.estado, datos = COALESCE(excluded.datos, revisiones.datos),
+             error = excluded.error, updated_at = excluded.updated_at`
+        )
+        .run(leadId, estado, datos ? JSON.stringify(datos) : null, error),
 
     agregarDocumento(doc) {
       const r = db
@@ -270,6 +295,7 @@ function crearRepositorio(db) {
       return repo.transaccion(() => {
         const rutas = db.prepare('SELECT ruta FROM documentos WHERE lead_id = ?').all(leadId).map((d) => d.ruta);
         db.prepare('DELETE FROM documentos WHERE lead_id = ?').run(leadId);
+        db.prepare('DELETE FROM revisiones WHERE lead_id = ?').run(leadId);
         db.prepare('DELETE FROM visitas WHERE lead_id = ?').run(leadId);
         db.prepare('DELETE FROM mensajes WHERE lead_id = ?').run(leadId);
         db.prepare('DELETE FROM leads WHERE id = ?').run(leadId);

@@ -13,7 +13,7 @@ const { crearApp } = require('../src/app');
 
 const AHORA = new Date('2026-10-15T13:00:00Z'); // jueves 10:00 Chile
 
-function preparar(envExtra = {}, { whatsappConfigurado = true, ahoraFn = () => AHORA } = {}) {
+function preparar(envExtra = {}, { whatsappConfigurado = true, ahoraFn = () => AHORA, lector = null, fetchAfp } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdo-test-'));
   const config = cargarConfig({ DATA_DIR: dataDir, APP_SECRET: 'secreto-test', ADMIN_CLAVE: 'clave', ...envExtra });
   const db = abrirDB(':memory:');
@@ -33,7 +33,7 @@ function preparar(envExtra = {}, { whatsappConfigurado = true, ahoraFn = () => A
     async enviarPlantilla(to, nombre, params) { wa.push({ to, plantilla: nombre, params }); },
     async marcarLeido() {},
   };
-  const app = crearApp({ config, db, mailer, whatsapp, ahora: ahoraFn });
+  const app = crearApp({ config, db, mailer, whatsapp, ahora: ahoraFn, lector, fetchAfp });
   return new Promise((resolve) => {
     const server = app.listen(0, () => {
       const url = `http://127.0.0.1:${server.address().port}`;
@@ -1022,4 +1022,119 @@ test('link pegado en la dirección: se corrige en las fichas existentes y se rec
   // Corregir con un link tampoco se acepta
   const rr = await fetch(`${ctx.url}/admin/lead/${lead.id}/propiedad`, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams({ propiedad: ML }) });
   assert.match(rr.headers.get('location'), /ok=propiedad_link/);
+});
+
+test('revisión automática: liquidaciones 2,5 veces el arriendo y certificado AFP Uno', async (t) => {
+  const liq = (periodo, monto) => ({ periodo, nombre_trabajador: 'Juan Pérez Soto', rut_trabajador: '11.111.111-1', empleador: 'Empresa SpA', liquido_a_pagar: monto, legible: true });
+  const leidos = [];
+  const lector = {
+    activo: true,
+    async leerLiquidaciones(docs) {
+      leidos.push(['liq', docs.length]);
+      return { ok: true, datos: { liquidaciones: [liq('2026-09', 820000), liq('2026-08', 800000), liq('2026-07', 780000)], observaciones: '' } };
+    },
+    async leerCertificadoAfp(docs) {
+      leidos.push(['afp', docs.length]);
+      return { ok: true, datos: { es_certificado_afp: true, afp: 'Uno', rut_afiliado: '11.111.111-1', nombre_afiliado: 'Juan', folio: 'ABC-123', fecha_emision: '2026-10-10', ultimo_periodo_cotizado: '2026-09', empleador_actual: 'Empresa SpA', observaciones: '' } };
+    },
+  };
+  const consultas = [];
+  const fetchAfp = async (url, opts) => {
+    consultas.push({ url, body: JSON.parse(opts.body) });
+    return { status: 200, json: async () => ({ codigo: '0', data: { bytes: Buffer.from('%PDF-1.4 prueba').toString('base64') } }) };
+  };
+  const ctx = await preparar({}, { lector, fetchAfp });
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+
+  const r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP) });
+  assert.strictEqual(r.status, 200);
+  await ctx.app.locals.esperarTareas();
+  const lead = ctx.db.leadPorTelefono('56987654321');
+  assert.deepStrictEqual(leidos.sort(), [['afp', 1], ['liq', 3]]);
+  assert.strictEqual(ctx.db.revisionDe(lead.id).estado, 'listo');
+  assert.deepStrictEqual(consultas[0], { url: 'https://www.uno.cl/api/afiliado-certificado/validar', body: { payload: { idPersona: '111111111', FolioCertificado: 'ABC-123' } } });
+
+  let ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Revisión automática/);
+  assert.match(ficha, /Falta el valor del arriendo/);
+  assert.match(ficha, /✅ Válido en AFP Uno/);
+  assert.match(ficha, /idéntico al original de la AFP/);
+
+  // Arriendo $300.000 -> requiere $750.000 líquidos: los 3 meses cumplen
+  const post = (ruta, datos) => fetch(ctx.url + ruta, { method: 'POST', headers: h, redirect: 'manual', body: new URLSearchParams(datos) });
+  assert.match((await post(`/admin/lead/${lead.id}/arriendo`, { valor_arriendo: '$300.000' })).headers.get('location'), /ok=arriendo/);
+  ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Renta líquida requerida: <strong>\$750\.000<\/strong>/);
+  assert.match(ficha, /✅ Cumple 2,5 veces el arriendo en las 3 liquidaciones/);
+  assert.match(await (await fetch(`${ctx.url}/admin`, { headers: h })).text(), /💰 Cumple/);
+
+  // Arriendo $320.000 -> requiere $800.000: julio ($780.000) no alcanza
+  await post(`/admin/lead/${lead.id}/arriendo`, { valor_arriendo: '320000' });
+  ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /❌ No cumple 2,5 veces el arriendo/);
+  assert.match(ficha, /❌ faltan \$20\.000/);
+  assert.match(await (await fetch(`${ctx.url}/admin`, { headers: h })).text(), /💰 No cumple/);
+});
+
+test('revisión automática: sin clave queda manual; AFP con captcha deja el link; complemento suma', async (t) => {
+  const { evaluarRenta } = require('../src/evaluacionRenta');
+  const { validarCertificado } = require('../src/validacionAfp');
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}` };
+  await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario(DATOS, DOCS_DEP) });
+  await ctx.app.locals.esperarTareas();
+  const lead = ctx.db.leadPorTelefono('56987654321');
+  assert.match(await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text(), /falta la clave ANTHROPIC_API_KEY/);
+
+  // Capital usa captcha: no se consulta, se deja el validador
+  let llamado = false;
+  const v = await validarCertificado({ afp: 'Capital', rut: '11.111.111-1', folio: 'X' }, { fetchFn: async () => { llamado = true; } });
+  assert.strictEqual(v.estado, 'manual');
+  assert.strictEqual(llamado, false);
+  assert.match(v.validador, /afpcapital\.cl/);
+  // Provida de sucursal: por teléfono
+  assert.match((await validarCertificado({ afp: 'Provida', folio: '1234567890123456' })).detalle, /600 201 0150/);
+  // AFP que no responde: no se marca como falso
+  assert.strictEqual((await validarCertificado({ afp: 'Habitat', folio: '99' }, { fetchFn: async () => { throw new Error('caída'); } })).estado, 'no_verificado');
+
+  // Complemento de renta: se suma el líquido del mismo mes
+  const l = (periodo, monto, rut = '11.111.111-1') => ({ periodo, liquido_a_pagar: monto, rut_trabajador: rut, legible: true });
+  const r = evaluarRenta({
+    valorArriendo: 400000,
+    titular: { rut: '11.111.111-1', liquidaciones: [l('2026-09', 600000), l('2026-08', 600000), l('2026-07', 600000)] },
+    comp: { rut: '22.222.222-2', liquidaciones: [l('2026-09', 450000, '22.222.222-2'), l('2026-08', 450000, '22.222.222-2'), l('2026-07', 350000, '22.222.222-2')] },
+    hoy: new Date('2026-10-15T12:00:00'),
+  });
+  assert.strictEqual(r.requerido, 1000000);
+  assert.deepStrictEqual(r.meses.map((m) => [m.total, m.cumple]), [[1050000, true], [1050000, true], [950000, false]]);
+  assert.strictEqual(r.cumple, false);
+  // Menos de 3 liquidaciones y RUT distinto quedan como alerta
+  const r2 = evaluarRenta({ valorArriendo: 100000, titular: { rut: '11.111.111-1', liquidaciones: [l('2026-09', 900000, '9.999.999-9')] }, hoy: new Date('2026-10-15T12:00:00') });
+  assert.strictEqual(r2.cumple, false);
+  assert.ok(r2.alertas.some((a) => /1 de 3/.test(a)));
+  assert.ok(r2.alertas.some((a) => /RUT distinto/.test(a)));
+});
+
+test('lector: arma la consulta a Claude con PDF e imágenes y salida en JSON', async () => {
+  const { crearLector, MODELO } = require('../src/lectura');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdo-lector-'));
+  fs.writeFileSync(path.join(dir, 'a.pdf'), '%PDF-1.4 x');
+  fs.writeFileSync(path.join(dir, 'b.jpg'), 'jpg');
+  fs.writeFileSync(path.join(dir, 'c.heic'), 'heic');
+  let pedido = null;
+  const cliente = { beta: { messages: { create: async (p) => { pedido = p; return { stop_reason: 'end_turn', content: [{ type: 'text', text: '{"liquidaciones":[],"observaciones":""}' }] }; } } } };
+  const lector = crearLector({ cliente });
+  const r = await lector.leerLiquidaciones([
+    { ruta: path.join(dir, 'a.pdf'), mime: 'application/pdf', nombre_original: 'a.pdf' },
+    { ruta: path.join(dir, 'b.jpg'), mime: 'image/jpeg', nombre_original: 'b.jpg' },
+    { ruta: path.join(dir, 'c.heic'), mime: 'image/heic', nombre_original: 'c.heic' },
+  ]);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.omitidos, ['c.heic']);
+  assert.strictEqual(pedido.model, MODELO);
+  assert.strictEqual(pedido.output_config.format.type, 'json_schema');
+  assert.deepStrictEqual(pedido.messages[0].content.map((b) => b.type), ['document', 'image', 'text']);
+  assert.strictEqual(crearLector({}).activo, false);
 });
