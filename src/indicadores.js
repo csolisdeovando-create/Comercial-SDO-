@@ -79,6 +79,12 @@ function calcularIndicadores({ leads, visitas, desde, hasta, hoy }) {
     noContinua: activas.filter((v) => v.resultado === 'no_continua').length,
     registradasEnBreal: activas.filter((v) => v.breal_at).length,
   };
+  // Las visitas del período incluyen a quienes no están en el embudo: visitas ingresadas a mano a personas que no
+  // postularon por el formulario, o que postularon antes del período. Se separan para que cuadre con el embudo.
+  const enEmbudo = new Set(cohorte.map((l) => l.id));
+  actividad.visitasFueraDelEmbudo = activas.filter((v) => !enEmbudo.has(v.lead_id)).length;
+  actividad.realizadasContinuaDelEmbudo = activas.filter((v) => v.resultado === 'realizada' && enEmbudo.has(v.lead_id)).length;
+  actividad.realizadasContinuaFueraDelEmbudo = actividad.realizadasContinua - actividad.realizadasContinuaDelEmbudo;
   actividad.asistencia = pct(actividad.realizadasContinua + actividad.noContinua, actividad.realizadasContinua + actividad.noContinua + actividad.noAsistio);
 
   // Tiempos (medianas) de las postulaciones del período

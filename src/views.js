@@ -779,7 +779,7 @@ function indicadores({ datos: d, periodo, config }) {
       <div class="titulo-seccion"><div><h1>Indicadores comerciales</h1><span class="nota">${esc(fechaCorta(d.periodo.desde))} al ${esc(fechaCorta(d.periodo.hasta))}</span></div>
         <nav class="periodos">${periodos.map(([k, t]) => `<a class="boton chico ${periodo.clave === k ? 'primario' : ''}" href="/admin/indicadores?periodo=${k}">${t}</a>`).join('')}</nav></div>
       <h2>Embudo de las postulaciones del período</h2>
-      <p class="nota">Cada interesado que postuló en el período, hasta dónde llegó.</p>
+      <p class="nota">Cada interesado que postuló con sus documentos en el período, hasta dónde llegó. Las visitas ingresadas a mano a personas que no postularon por el formulario (o que postularon antes) no están en el embudo: se cuentan abajo, en las visitas del período.</p>
       <div class="embudo">${d.embudo
         .map(
           (e, i) => `<div class="etapa"><span class="nombre">${esc(e.etapa)}</span>
@@ -789,9 +789,9 @@ function indicadores({ datos: d, periodo, config }) {
         .join('')}</div>
     </section>
     <section class="resumen-estados">
-      ${cifra(a.visitasAgendadas, 'Visitas del período', a.visitasManuales ? `${a.visitasManuales} ingresadas a mano` : '')}
+      ${cifra(a.visitasAgendadas, 'Visitas del período', [a.visitasManuales ? `${a.visitasManuales} ingresadas a mano` : '', a.visitasFueraDelEmbudo ? `${a.visitasFueraDelEmbudo} fuera del embudo` : ''].filter(Boolean).join(' · '))}
       ${cifra(a.asistencia === null ? '—' : `${a.asistencia}%`, 'Asistencia', `${a.noAsistio} no asistió`)}
-      ${cifra(a.realizadasContinua, 'Visitaron y continúan')}
+      ${cifra(a.realizadasContinua, 'Visitaron y continúan', a.realizadasContinuaFueraDelEmbudo ? `${a.realizadasContinuaDelEmbudo} del embudo · ${a.realizadasContinuaFueraDelEmbudo} fuera del embudo` : 'todas del embudo')}
       ${cifra(d.tiempos.horasHastaAprobacion === null ? '—' : `${d.tiempos.horasHastaAprobacion} h`, 'Postulación → aprobación', 'mediana')}
       ${cifra(d.tiempos.diasDeAprobacionAVisita === null ? '—' : `${d.tiempos.diasDeAprobacionAVisita} días`, 'Aprobación → visita', 'mediana')}
     </section>

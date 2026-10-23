@@ -1412,6 +1412,7 @@ test('indicadores: embudo, actividad y JSON con clave para el panel de Cristian'
   assert.strictEqual(d.actividad.noAsistio, 1);
   assert.strictEqual(d.actividad.asistencia, 50);
   assert.strictEqual(d.actividad.registradasEnBreal, 1);
+  assert.deepStrictEqual([d.actividad.realizadasContinua, d.actividad.realizadasContinuaDelEmbudo, d.actividad.realizadasContinuaFueraDelEmbudo, d.actividad.visitasFueraDelEmbudo], [1, 1, 0, 0]);
   assert.strictEqual(d.tiempos.horasHastaAprobacion, 48);
   assert.deepStrictEqual(d.porPortal.map((p) => [p.portal, p.postularon, p.continuan]), [['Yapo', 2, 1], ['Mercado Libre', 2, 0]]);
   assert.strictEqual(d.pendientes.porRevisar, 1);
@@ -1424,6 +1425,15 @@ test('indicadores: embudo, actividad y JSON con clave para el panel de Cristian'
   const clave = require('node:crypto').createHash('sha256').update('sdo-rent:123456785').digest('hex').slice(0, 32);
   assert.deepStrictEqual(seg.seguimiento[0], { clave, portal: 'Yapo', postulacion: '2026-10-10', aprobado: '2026-10-11', rechazado: null, agendo: '2026-10-13', visito: '2026-10-13', resultado: 'realizada', motivo: null, registradaEnBreal: true });
   assert.doesNotMatch(JSON.stringify(seg.seguimiento), /Persona|@x\.cl|5690000/);
+  // Una visita ingresada a mano a alguien que no postuló por el formulario: cuenta en las visitas, no en el embudo
+  const m = ctx.db.crearLead({ telefono: '56900000009', nombre: 'Manual', portal: 'Yapo', estado: 'visitado' });
+  const vm = ctx.db.crearVisita(m.id, '2026-10-15', 12);
+  ctx.db.registrarResultadoVisita(vm.id, 'realizada', '');
+  const d2 = await (await fetch(`${ctx.url}/api/indicadores?desde=2026-10-01&hasta=2026-10-31`, { headers: { authorization: 'Bearer token-kpi-123' } })).json();
+  assert.strictEqual(d2.embudo.at(-1).cantidad, 1);
+  assert.deepStrictEqual([d2.actividad.realizadasContinua, d2.actividad.realizadasContinuaDelEmbudo, d2.actividad.realizadasContinuaFueraDelEmbudo, d2.actividad.visitasFueraDelEmbudo], [2, 1, 1, 1]);
+  const html2 = await (await fetch(`${ctx.url}/admin/indicadores?desde=2026-10-01&hasta=2026-10-31`, { headers: h })).text();
+  assert.match(html2, /1 del embudo · 1 fuera del embudo/);
   // Sin clave configurada, el endpoint no existe
   const sin = await preparar();
   t.after(() => sin.server.close());
