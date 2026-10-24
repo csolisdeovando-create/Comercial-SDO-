@@ -41,7 +41,9 @@ function cargarConfig(env = process.env) {
       horas: lista(env.AGENDA_HORAS, '9,10,11,12,13,14,15,16,17,18').map(Number),
       // Días con visitas: 1 = lunes … 6 = sábado
       diasSemana: lista(env.AGENDA_DIAS, '1,2,3,4,5,6').map(Number),
-      horasSabado: lista(env.AGENDA_HORAS_SABADO, '9,10,11,12,13,14,15').map(Number),
+      // Los sábados no se trabaja: solo se ofrecen las horas que el equipo habilita en el calendario del panel
+      horasSabado: lista(env.AGENDA_HORAS_SABADO, '').map(Number),
+      horasSabadoHabilitables: lista(env.AGENDA_HORAS_SABADO_HABILITABLES, '9,10,11,12,13,14,15,16,17,18').map(Number),
       diasHabiles: Number(env.AGENDA_DIAS_HABILES || 15),
       anticipacionHoras: Number(env.AGENDA_ANTICIPACION_HORAS || 2),
       cuposPorBloque: Number(env.AGENDA_CUPOS_POR_BLOQUE || 1),

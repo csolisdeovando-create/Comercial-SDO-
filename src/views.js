@@ -7,7 +7,7 @@ const { MOTIVOS_NO_CONTINUA, resultadoBreal } = require('./notificaciones');
 const { fechaLegible } = require('./personas');
 
 const PLAZO_CORTO = { '5_dias': '5 días', '15_dias': '15 días', '1_mes': '1 mes', mas_1_mes: '+1 mes' };
-const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSemana, textoDias } = require('./agenda');
+const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSemana, textoDias, esSabado } = require('./agenda');
 
 function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true } = {}) {
   const menu = nav
@@ -1029,8 +1029,10 @@ function nuevaVisita({ valores: v, errores, conflicto, cruces = [], existente, o
 function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], proximas, nueva = null, config }) {
   const cols = columnasSemana(config.agenda);
   const dias = cols.map((d) => sumarDias(lunes, d - 1));
-  // Horas del horario normal + las de visitas ingresadas a mano fuera de horario
-  const horas = [...new Set([...dias.flatMap((f) => horasDe(config.agenda, f)), ...visitas.map((v) => v.hora)])].sort((x, y) => x - y);
+  // Horas del horario normal + las que se pueden abrir el sábado + las de visitas ingresadas a mano fuera de horario
+  const habilitables = config.agenda.horasSabadoHabilitables || [];
+  const horasDia = (f) => (esSabado(f) ? [...new Set([...horasDe(config.agenda, f), ...habilitables])] : horasDe(config.agenda, f));
+  const horas = [...new Set([...dias.flatMap(horasDia), ...visitas.map((v) => v.hora)])].sort((x, y) => x - y);
   const enBloque = (f, h) => visitas.filter((v) => v.fecha === f && v.hora === h);
   const bloqueoDe = (f, h) => bloqueos.find((b) => b.fecha === f && (b.hora === null || b.hora === h));
   const diaBloqueado = (f) => bloqueos.find((b) => b.fecha === f && b.hora === null);
@@ -1041,6 +1043,14 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
     `<form method="post" action="/admin/bloqueos" class="form-bloqueo">${campoSemana}<input type="hidden" name="fecha" value="${f}"><input type="hidden" name="hora" value="${h ?? ''}"><button class="boton-bloquear" title="Bloquear: el equipo no puede a esta hora">${texto}</button></form>`;
   const botonDesbloquear = (b) =>
     `<form method="post" action="/admin/bloqueos/${b.id}/eliminar" class="form-bloqueo">${campoSemana}<button class="boton-bloquear" title="Volver a dejar disponible">Desbloquear</button></form>`;
+  // Sábado: abrir o cerrar una hora (o todo el día) para que los interesados puedan agendar
+  const botonSabado = (f, h, accion, texto, titulo) =>
+    `<form method="post" action="/admin/sabado" class="form-bloqueo">${campoSemana}<input type="hidden" name="fecha" value="${f}"><input type="hidden" name="hora" value="${h}"><input type="hidden" name="accion" value="${accion}"><button class="boton-bloquear ${accion === 'abrir' ? 'abrir' : ''}" title="${titulo}">${texto}</button></form>`;
+  const accionesSabadoDia = (f) => {
+    const abiertas = horasDe(config.agenda, f).filter((h) => habilitables.includes(h));
+    return `${abiertas.length < habilitables.length ? botonSabado(f, 'todas', 'abrir', '🟢 Abrir sábado', `Habilitar de ${horaTexto(habilitables[0])} a ${horaTexto(habilitables.at(-1))} para que los interesados agenden`) : ''}${
+      abiertas.length ? botonSabado(f, 'todas', 'cerrar', 'Cerrar sábado', 'Quitar todas las horas habilitadas de este sábado') : ''}`;
+  };
   const botonAgregar = (f, h) => `<a class="boton-agregar" href="/admin/visita/nueva?fecha=${f}&amp;hora=${h}" title="Ingresar una visita a esta hora">＋<span class="txt"> Agendar</span></a>`;
   const estadoVisita = (v) => (v.resultado ? 'realizada' : v.confirmada_at ? 'confirmada' : 'pendiente');
   const tarjetaVisita = (v) => `<a class="visita ${estadoVisita(v)}" href="/admin/lead/${v.lead_id}">
@@ -1059,11 +1069,21 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
     const bl = bloqueoDe(f, h);
     const enHorario = horasDe(config.agenda, f).includes(h);
     const futuro = f >= hoy && !config.agenda.feriados.includes(f);
-    const acciones = !vs.length && futuro && !bl && enHorario ? `<div class="acciones-bloque">${botonAgregar(f, h)}${botonBloquear(f, h, '🔒')}</div>` : '';
+    const sabado = esSabado(f) && habilitables.includes(h);
+    // Sábado cerrado: se puede abrir la hora para los interesados o ingresar una visita a mano igual
+    const cerrado = sabado && !enHorario;
+    const cerrar = sabado && enHorario ? botonSabado(f, h, 'cerrar', 'Cerrar', 'Que los interesados ya no puedan agendar a esta hora') : '';
+    const acciones =
+      !vs.length && futuro && !bl && enHorario
+        ? `<div class="acciones-bloque">${botonAgregar(f, h)}${botonBloquear(f, h, '🔒')}${cerrar}</div>`
+        : !vs.length && futuro && cerrado
+          ? `<div class="acciones-bloque sabado-cerrado">${botonSabado(f, h, 'abrir', '🟢 Abrir', 'Habilitar esta hora para que los interesados agenden')}${botonAgregar(f, h)}</div>`
+          : '';
     return {
       vs,
       bl,
-      enHorario,
+      enHorario: enHorario || (cerrado && futuro),
+      cerrado,
       html: `${vs.map(tarjetaVisita).join('')}${
         bl ? `<div class="bloqueo">🔒 ${esc(bl.motivo || 'Bloqueado')}${bl.hora !== null && futuro ? botonDesbloquear(bl) : ''}</div>` : acciones
       }`,
@@ -1083,7 +1103,8 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
             const n = cuantas(f);
             return `<th class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${d.bloqueo ? 'bloqueado' : ''}"><span>${esc(d.nombre)}</span><small>${esc(d.fecha)}${d.feriado ? ' · feriado' : ''}</small>
               <small class="responsable">${n ? `${n} visita${n > 1 ? 's' : ''}` : 'Sin visitas'}</small>
-              ${f >= hoy && !d.feriado ? (d.bloqueo ? botonDesbloquear(d.bloqueo) : botonBloquear(f, null, '🔒 Día')) : ''}</th>`;
+              ${f >= hoy && !d.feriado ? (d.bloqueo ? botonDesbloquear(d.bloqueo) : botonBloquear(f, null, '🔒 Día')) : ''}
+              ${f >= hoy && esSabado(f) ? accionesSabadoDia(f) : ''}</th>`;
           })
           .join('')}</tr></thead>
         <tbody>${horas
@@ -1092,7 +1113,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
               .map((f) => {
                 const c = contenidoBloque(f, h);
                 if (!c.enHorario && !c.vs.length) return '<td class="na"></td>';
-                return `<td class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${c.bl ? 'bloqueado' : ''}">${c.html}</td>`;
+                return `<td class="${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''} ${c.bl ? 'bloqueado' : ''} ${c.cerrado ? 'cerrado' : ''}">${c.html}</td>`;
               })
               .join('')}</tr>`
           )
@@ -1110,12 +1131,13 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
         .filter(({ c }) => (f < hoy ? c.vs.length : c.enHorario || c.vs.length))
         .map(
           ({ h, c }) =>
-            `<li class="${c.bl ? 'bloqueado' : ''} ${c.vs.length ? 'con-visita' : ''}"><span class="hora">${horaTexto(h)}</span><div>${c.html || (f < hoy ? '' : '<span class="libre">Libre</span>')}</div></li>`
+            `<li class="${c.bl ? 'bloqueado' : ''} ${c.vs.length ? 'con-visita' : ''} ${c.cerrado ? 'cerrado' : ''}"><span class="hora">${horaTexto(h)}</span><div>${c.html || (f < hoy ? '' : '<span class="libre">Libre</span>')}</div></li>`
         )
         .join('');
       return `<section class="dia-lista ${f === hoy ? 'hoy' : ''} ${f < hoy ? 'pasado' : ''}" ${f === hoy ? 'id="hoy"' : ''}>
         <header><div><strong>${esc(d.nombre)}</strong> ${esc(d.fecha)}${d.feriado ? ' · feriado' : ''}<small>${cuantas(f) ? `${cuantas(f)} visita${cuantas(f) > 1 ? 's' : ''}` : 'Sin visitas'}</small></div>
-          ${f >= hoy && !d.feriado ? (d.bloqueo ? botonDesbloquear(d.bloqueo) : botonBloquear(f, null, '🔒 Día')) : ''}</header>
+          ${f >= hoy && !d.feriado ? (d.bloqueo ? botonDesbloquear(d.bloqueo) : botonBloquear(f, null, '🔒 Día')) : ''}
+          ${f >= hoy && esSabado(f) ? `<div class="acciones-sabado">${accionesSabadoDia(f)}</div>` : ''}</header>
         ${d.bloqueo ? `<p class="bloqueo">🔒 Día bloqueado${d.bloqueo.motivo ? `: ${esc(d.bloqueo.motivo)}` : ''}</p>` : ''}
         ${filas ? `<ul>${filas}</ul>` : '<p class="sin-visitas">Sin visitas</p>'}
       </section>`;

@@ -7,7 +7,7 @@ const multer = require('multer');
 const archiver = require('archiver');
 
 const { REQUISITOS, TIPOS, PREFIJO_COMP, esComplemento, todosLosCampos, nombreRequisito } = require('./requisitos');
-const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias, horasDe } = require('./agenda');
+const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias, horasDe, esSabado } = require('./agenda');
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
 const { interpretarUrl, leerPublicacion, resumenPropiedad, pareceLink, faltaDireccion } = require('./publicacion');
@@ -25,7 +25,9 @@ const EXT_PERMITIDAS = /\.(pdf|jpe?g|png|webp|heic|heif)$/i;
 function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lector = null, fetchAfp = fetch }) {
   const app = express();
   const notif = crearNotificaciones({ config, mailer, whatsapp, db });
-  const cfgAgenda = { ...config.agenda, zonaHoraria: config.zonaHoraria };
+  // Los sábados se agregan las horas que el equipo habilita en el calendario del panel
+  const cfgAgenda = { ...config.agenda, zonaHoraria: config.zonaHoraria, horasExtra: (fecha) => db.horasHabilitadas(fecha) };
+  const configVista = { ...config, agenda: cfgAgenda };
   const opcVista = { empresa: config.empresa.nombre };
   const tareas = new Set(); // procesos en segundo plano (útil para pruebas)
   app.locals.esperarTareas = () => Promise.allSettled([...tareas]);
@@ -605,7 +607,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   }
 
   function mostrarCalendario(res, lead, error, status = 200) {
-    res.status(status).send(vistas.calendario({ lead, cal: calendarioDisponible(), visita: db.visitaVigente(lead.id), error, config }));
+    res.status(status).send(vistas.calendario({ lead, cal: calendarioDisponible(), visita: db.visitaVigente(lead.id), error, config: configVista }));
   }
 
   // Reserva un bloque para el interesado (usada por el interesado y por el equipo). Devuelve { visita, anterior } o un error.
@@ -1045,7 +1047,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         bloqueos: db.bloqueosEntre(lunes, sabado),
         proximas: db.listarVisitas(hoy),
         nueva,
-        config,
+        config: configVista,
       })
     );
   });
@@ -1348,6 +1350,19 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     }
     res.redirect(303, volverCalendario(req));
   });
+  // Sábados: el equipo abre (o vuelve a cerrar) horas para que los interesados puedan agendar
+  app.post('/admin/sabado', formAdmin, (req, res) => {
+    const fecha = String(req.body?.fecha || '');
+    const posibles = config.agenda.horasSabadoHabilitables;
+    const horas = req.body?.hora === 'todas' ? posibles : [Number(req.body?.hora)].filter((h) => posibles.includes(h));
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fecha) && esSabado(fecha) && fecha >= hoyChile() && horas.length) {
+      if (req.body?.accion === 'cerrar') db.deshabilitarHoras(fecha, horas);
+      else db.habilitarHoras(fecha, horas);
+    }
+    const semana = parseInt(req.body?.semana, 10) || 0;
+    res.redirect(303, `/admin/calendario${semana ? `?semana=${semana}` : ''}`);
+  });
+
   app.post('/admin/bloqueos/:bid/eliminar', formAdmin, (req, res) => {
     db.desbloquear(Number(req.params.bid));
     res.redirect(303, volverCalendario(req));

@@ -136,7 +136,7 @@ test('flujo completo de un lead', async (t) => {
   // 4) Calendario y reserva
   const cal = await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text();
   assert.match(cal, /value="2026-10-16\|9"/);
-  assert.match(cal, /value="2026-10-17\|9"/); // sábado disponible
+  assert.doesNotMatch(cal, /value="2026-10-17\|/); // sábado cerrado hasta que el equipo lo abra
   assert.doesNotMatch(cal, /value="2026-10-18\|/); // domingo no
 
   r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-18|9' }) });
@@ -653,7 +653,8 @@ test('sábados con el mismo equipo, bloqueos y reagendar desde el panel', async 
   let aviso = ctx.correos.find((c) => /Nueva visita/.test(c.subject));
   assert.deepStrictEqual([...aviso.to].sort(), [...EQUIPO].sort());
 
-  // El equipo la reagenda al sábado 17 a las 11 -> mismo equipo, mismo evento movido
+  // El equipo abre el sábado 17 y la reagenda a las 11 -> mismo equipo, mismo evento movido
+  assert.strictEqual((await post('/admin/sabado', { fecha: '2026-10-17', hora: 'todas', accion: 'abrir', semana: '0' })).status, 303);
   const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
   assert.match(ficha, /Reagendar: elegir nueva fecha y hora/);
   assert.match(ficha, /value="2026-10-17\|11"/);
@@ -683,17 +684,47 @@ test('sábados con el mismo equipo, bloqueos y reagendar desde el panel', async 
   assert.match(cal, /value="2026-10-16\|15"/);
 });
 
-test('horarios cada 1 hora: lunes a viernes de 9 a 18, sábado de 9 a 15, sin cruces', async (t) => {
+test('horarios cada 1 hora: lunes a viernes de 9 a 18; sábado cerrado salvo las horas que abre el equipo (hasta las 18), sin cruces', async (t) => {
   const ctx = await preparar();
   t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const sabado = (datos) => fetch(`${ctx.url}/admin/sabado`, { method: 'POST', headers: h, body: new URLSearchParams({ fecha: '2026-10-17', semana: '0', ...datos }), redirect: 'manual' });
   const lead = ctx.db.crearLead({ telefono: '56911110000', nombre: 'Luis', email: 'l@example.com', estado: 'aprobado' });
-  const cal = await (await fetch(`${ctx.url}/agendar/${lead.token}`)).text();
+  const agenda = async () => (await fetch(`${ctx.url}/agendar/${lead.token}`)).text();
+  let cal = await agenda();
   for (let h = 9; h <= 18; h++) assert.match(cal, new RegExp(`value="2026-10-16\\|${h}"`), `viernes ${h}:00`);
   assert.doesNotMatch(cal, /value="2026-10-16\|19"/);
-  for (let h = 9; h <= 15; h++) assert.match(cal, new RegExp(`value="2026-10-17\\|${h}"`), `sábado ${h}:00`);
-  assert.doesNotMatch(cal, /value="2026-10-17\|16"/);
-  let r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-17|16' }) });
+  assert.doesNotMatch(cal, /value="2026-10-17\|/, 'el sábado parte cerrado');
+  let r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-17|10' }) });
   assert.strictEqual(r.status, 422);
+
+  // En el calendario del panel se ve para abrirlo
+  let panel = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(panel, /🟢 Abrir sábado/);
+
+  // El equipo abre solo las 16 y las 18
+  assert.strictEqual((await sabado({ hora: '16', accion: 'abrir' })).status, 303);
+  await sabado({ hora: '18', accion: 'abrir' });
+  await sabado({ hora: '19', accion: 'abrir' }); // fuera del rango: no hace nada
+  cal = await agenda();
+  assert.match(cal, /value="2026-10-17\|16"/);
+  assert.match(cal, /value="2026-10-17\|18"/);
+  assert.doesNotMatch(cal, /value="2026-10-17\|(9|10|19)"/);
+  // Abrir todo el sábado: de 9 a 18; cerrar las 18 la vuelve a quitar
+  await sabado({ hora: 'todas', accion: 'abrir' });
+  await sabado({ hora: '18', accion: 'cerrar' });
+  cal = await agenda();
+  for (let h = 9; h <= 17; h++) assert.match(cal, new RegExp(`value="2026-10-17\\|${h}"`), `sábado ${h}:00`);
+  assert.doesNotMatch(cal, /value="2026-10-17\|18"/);
+  panel = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(panel, /Cerrar sábado/);
+  r = await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-17|17' }) });
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(ctx.db.visitaVigente(lead.id).hora, 17);
+  // Un sábado que ya pasó no se puede abrir
+  await fetch(`${ctx.url}/admin/sabado`, { method: 'POST', headers: h, body: new URLSearchParams({ fecha: '2026-10-10', hora: 'todas', accion: 'abrir' }), redirect: 'manual' });
+  assert.deepStrictEqual(ctx.db.horasHabilitadas('2026-10-10'), []);
+  ctx.db.cancelarVisitasDeLead(lead.id); // el resto de la prueba parte sin visita
 
   // Una hora ya tomada no se ofrece ni se puede reservar
   const otra = ctx.db.crearLead({ telefono: '56922220000', nombre: 'Rosa', email: 'r@example.com', estado: 'aprobado' });

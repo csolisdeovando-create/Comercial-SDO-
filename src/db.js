@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS bloqueos (
 );
 CREATE INDEX IF NOT EXISTS idx_bloqueos_fecha ON bloqueos(fecha);
 
+-- Horas que el equipo abre en días que normalmente no se trabaja (sábados)
+CREATE TABLE IF NOT EXISTS horas_habilitadas (
+  fecha TEXT NOT NULL,
+  hora INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (fecha, hora)
+);
+
 -- Lectura automática de liquidaciones y certificado de AFP (una fila por interesado)
 CREATE TABLE IF NOT EXISTS revisiones (
   lead_id INTEGER PRIMARY KEY REFERENCES leads(id),
@@ -239,6 +247,15 @@ function crearRepositorio(db) {
         for (const h of horas) mapa.set(`${b.fecha} ${h}`, 9999);
       }
       return mapa;
+    },
+    horasHabilitadas: (fecha) => db.prepare('SELECT hora FROM horas_habilitadas WHERE fecha = ? ORDER BY hora').all(fecha).map((r) => r.hora),
+    habilitarHoras: (fecha, horas) => {
+      const st = db.prepare('INSERT OR IGNORE INTO horas_habilitadas (fecha, hora) VALUES (?, ?)');
+      for (const h of horas) st.run(fecha, h);
+    },
+    deshabilitarHoras: (fecha, horas) => {
+      const st = db.prepare('DELETE FROM horas_habilitadas WHERE fecha = ? AND hora = ?');
+      for (const h of horas) st.run(fecha, h);
     },
     bloqueosEntre: (desde, hasta) =>
       db.prepare('SELECT * FROM bloqueos WHERE fecha BETWEEN ? AND ? ORDER BY fecha, hora').all(desde, hasta),

@@ -39,10 +39,12 @@ function esDiaHabil(fecha, feriados = [], diasSemana = DIAS_POR_DEFECTO) {
   return diasSemana.includes(diaSemana(fecha)) && !feriados.includes(fecha);
 }
 
-// Horas de visita de una fecha (los sábados pueden tener otro horario)
+// Horas de visita de una fecha. Los sábados: las fijas (si hay) + las que el equipo habilitó ese día (cfg.horasExtra)
 function horasDe(cfg, fecha) {
-  return diaSemana(fecha) === 6 && cfg.horasSabado?.length ? cfg.horasSabado : cfg.horas;
+  if (diaSemana(fecha) !== 6) return cfg.horas;
+  return [...new Set([...(cfg.horasSabado || []), ...(cfg.horasExtra ? cfg.horasExtra(fecha) : [])])].sort((a, b) => a - b);
 }
+const esSabado = (fecha) => diaSemana(fecha) === 6;
 
 // Días de la semana que se muestran como columnas (1 = lunes … 6 = sábado)
 const columnasSemana = (cfg) => [...(cfg.diasSemana || DIAS_POR_DEFECTO)].filter((d) => d >= 1 && d <= 6).sort((a, b) => a - b);
@@ -93,12 +95,12 @@ function construirCalendario(cfg, ocupacion = new Map(), ahora = new Date()) {
       );
     }
     const dia = semanas.get(lunes)[cols.indexOf(diaSemana(fecha))];
-    dia.habilitado = true;
     dia.bloques = horasDe(cfg, fecha).map((hora) => {
       const ocupados = ocupacion.get(`${fecha} ${hora}`) || 0;
       const pasado = fecha < hoy || (fecha === hoy && hora * 60 < limiteMinutos);
       return { fecha, hora, disponible: !pasado && ocupados < cfg.cuposPorBloque };
     });
+    dia.habilitado = dia.bloques.length > 0; // un sábado sin horas habilitadas se muestra cerrado
   }
 
   return {
@@ -203,4 +205,5 @@ module.exports = {
   generarICS,
   esDiaHabil,
   sumarDias,
+  esSabado,
 };
