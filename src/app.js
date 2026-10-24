@@ -704,11 +704,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     if (!lead) return;
     const visita = db.visitaVigente(lead.id);
     if (!visita) return res.redirect(303, `/agendar/${lead.token}`);
-    if (!visita.confirmada_at) {
-      db.confirmarAsistencia(visita.id);
-      const actualizada = db.visitaVigente(lead.id);
-      await notif.asistenciaConfirmada(lead, actualizada).catch((e) => console.error('[confirmar] aviso al equipo:', e));
-    }
+    // Solo queda marcada (en verde en el panel): al equipo no le llega correo
+    if (!visita.confirmada_at) db.confirmarAsistencia(visita.id);
     res.redirect(303, `/visita/${lead.token}/confirmar`);
   });
 

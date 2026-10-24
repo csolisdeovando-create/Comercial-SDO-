@@ -889,7 +889,7 @@ function seccionVisita(lead, visita, disponibles) {
   return `<section class="tarjeta" id="visita">
     <div class="titulo-seccion">
       <div><h1>Visita</h1><p class="cuando-visita">📅 ${esc(cuando)}</p>
-      <p class="${visita.confirmada_at ? 'confirmo' : 'nota'}">${visita.confirmada_at ? '✅ El interesado confirmó su asistencia' : '⏳ El interesado aún no confirma (se le pide el día anterior)'}</p>
+      <p class="${visita.confirmada_at ? 'confirmo' : 'nota'}">${visita.confirmada_at ? '✅ El interesado confirmó su asistencia' : '⏳ El interesado aún no confirma (se le pide al agendar y el día anterior). Cuando confirme, la visita queda en verde en el calendario.'}</p>
       ${lead.propiedad ? `<p class="nota">🏠 ${esc(lead.propiedad)}</p>` : ''}</div>
       ${visita.resultado ? `<span class="estado ${visita.resultado === 'realizada' ? 'agendado' : visita.resultado === 'no_continua' ? 'rechazado' : 'documentos_recibidos'}">${RESULTADO_VISITA[visita.resultado]}</span>` : '<span class="estado aprobado">Pendiente</span>'}
     </div>
@@ -1052,13 +1052,16 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
       abiertas.length ? botonSabado(f, 'todas', 'cerrar', 'Cerrar sábado', 'Quitar todas las horas habilitadas de este sábado') : ''}`;
   };
   const botonAgregar = (f, h) => `<a class="boton-agregar" href="/admin/visita/nueva?fecha=${f}&amp;hora=${h}" title="Ingresar una visita a esta hora">＋<span class="txt"> Agendar</span></a>`;
+  // Pendiente: si ya se le pidió confirmar (recordatorio) o si no tiene correo y hay que llamarlo
+  const sinConfirmar = (v) =>
+    !v.email ? '⏳ Sin confirmar · sin correo: llamarlo' : v.recordatorio_at ? '⏳ Sin confirmar · ya se le pidió' : '⏳ Sin confirmar';
   const estadoVisita = (v) => (v.resultado ? 'realizada' : v.confirmada_at ? 'confirmada' : 'pendiente');
   const tarjetaVisita = (v) => `<a class="visita ${estadoVisita(v)}" href="/admin/lead/${v.lead_id}">
       <strong>${esc(v.nombre || 'Interesado')}</strong>
       ${v.propiedad ? `<span class="prop ${faltaDireccion(v.propiedad) ? 'falta' : ''}">🏠 ${esc(v.propiedad)}</span>` : '<span class="prop falta">🏠 Dirección por confirmar</span>'}
       <span class="tel">📞 +${esc(v.telefono || '')}</span>
       ${v.email ? `<span class="correo">✉️ ${esc(v.email)}</span>` : ''}
-      ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : v.confirmada_at ? '<span class="res">✅ Confirmó asistencia</span>' : ''}
+      ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : v.confirmada_at ? '<span class="res">✅ Confirmó asistencia</span>' : `<span class="res sin-confirmar">${sinConfirmar(v)}</span>`}
       ${v.origen === 'equipo' ? `<span class="tag-manual" title="Ingresada a mano por el equipo">✍️ ${esc(v.portal || 'Manual')}</span>` : ''}
     </a>`;
   const cuantas = (f) => visitas.filter((v) => v.fecha === f).length;

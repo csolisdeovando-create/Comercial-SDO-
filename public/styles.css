@@ -399,3 +399,4 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 .boton-bloquear.abrir { border-style: solid; border-color: #1f8a4c; color: #1f8a4c; }
 .cal-panel thead .boton-bloquear.abrir { color: #fff; border-color: #7be0a4; }
 .acciones-sabado { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.visita .res.sin-confirmar { color: #9a6b00; font-weight: 500; }

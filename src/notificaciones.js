@@ -443,7 +443,9 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
              <p>${porEquipo && reagendada ? 'Tuvimos que cambiar el horario de tu visita. La nueva fecha es:' : 'Tu visita quedó agendada para el:'}</p>
              <p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
              ${lead.propiedad ? `<p>🏠 ${esc(lead.propiedad)}</p>` : ''}
-             <p>El día anterior te enviaremos un recordatorio para confirmar tu asistencia. Si este horario no te acomoda, puedes elegir otro:</p>
+             <p><strong>Por favor confírmanos tu asistencia</strong> con este botón (también te lo pediremos el día anterior):</p>
+             ${boton('✅ Confirmar asistencia', `${config.baseUrl}/visita/${lead.token}/confirmar`)}
+             <p>Si este horario no te acomoda, puedes elegir otro:</p>
              ${boton('📅 Cambiar horario', linkAgenda(lead), '#111417')} ${boton('❌ Cancelar visita', linkCancelar(lead), '#8c2a20')}`
           ),
           icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: this.eventoInteresado(lead, visita) },
