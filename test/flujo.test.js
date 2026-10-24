@@ -566,15 +566,17 @@ test('evento de calendario del equipo: información completa, confirmación, rea
   assert.ok(agendadaInteresado, 'el correo de visita agendada trae el botón para confirmar');
   assert.match(await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text(), /⏳ Sin confirmar/);
 
-  // Confirmar asistencia: GET solo muestra el botón; POST la marca en verde, sin correo al equipo
-  const correosAntes = ctx.correos.length;
+  // Confirmar asistencia: GET solo muestra el botón; POST la marca en verde y actualiza el evento del equipo
   let r = await fetch(`${ctx.url}/visita/${lead.token}/confirmar`);
   assert.match(await r.text(), /Sí, confirmo mi asistencia/);
   assert.strictEqual(ctx.db.visitaVigente(lead.id).confirmada_at, null);
   r = await fetch(`${ctx.url}/visita/${lead.token}/confirmar`, { method: 'POST', redirect: 'manual' });
   assert.strictEqual(r.status, 303);
   assert.ok(ctx.db.visitaVigente(lead.id).confirmada_at);
-  assert.strictEqual(ctx.correos.length, correosAntes, 'confirmar no manda correos');
+  const conf = ctx.correos.find((c) => /CONFIRMADA por el interesado/.test(c.subject));
+  const ev2 = conf.icalEvent.content.replace(/\r\n /g, '');
+  assert.match(ev2, /SUMMARY:✅ 🏠 Rosario Sur 91/);
+  assert.strictEqual(ev2.match(/UID:(.*)/)[1], uid, 'mismo evento');
   assert.match(await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text(), /✅ Confirmó asistencia/);
   assert.match(await (await fetch(`${ctx.url}/visita/${lead.token}/confirmar`)).text(), /Ya confirmaste/);
   assert.match(await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text(), /El interesado confirmó su asistencia/);
