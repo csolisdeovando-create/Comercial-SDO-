@@ -44,6 +44,11 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     const primeraVez = visita.resultado !== resultado;
     db.registrarResultadoVisita(visita.id, resultado, String(notas || '').trim().slice(0, 2000), MOTIVOS_NO_CONTINUA.includes(motivo) ? motivo : null);
     lead = db.actualizarLead(lead.id, { estado: RESULTADOS[resultado] });
+    // No asistió o no continúa: a la papelera (si vuelve a agendar con su link, sale sola)
+    if (resultado === 'no_asistio') db.aPapelera(lead.id, 'No asistió a la visita');
+    else if (resultado === 'no_continua') db.aPapelera(lead.id, `No continúa${MOTIVOS_NO_CONTINUA.includes(motivo) ? `: ${motivo}` : ''}`);
+    else if (lead.papelera_at) db.sacarDePapelera(lead.id);
+    lead = db.leadPorId(lead.id);
     const actualizada = db.visitaPorId(visita.id);
     if (informarEquipo) await notif.resultadoRegistrado(lead, actualizada).catch((e) => console.error('[resultado] aviso al equipo:', e));
     if (avisar && primeraVez) await notif.seguimientoVisita(lead, actualizada, resultado).catch((e) => console.error('[resultado] seguimiento:', e));
@@ -752,6 +757,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       const motivo = String(req.body?.motivo || '').trim().slice(0, 300) || null;
       db.cancelarVisita(visita.id, { por: 'interesado', motivo });
       lead = db.actualizarLead(lead.id, { estado: 'aprobado' });
+      db.aPapelera(lead.id, `Canceló su visita${motivo ? `: ${motivo}` : ''}`);
       await notif.cancelacionInteresado(lead, visita, motivo).catch((e) => console.error('[cancelar] aviso:', e));
     }
     res.send(
@@ -931,8 +937,11 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   app.get('/admin', (req, res) => {
     const eliminado = req.query.eliminado ? String(req.query.eliminado).slice(0, 150) : null;
     const filtros = { q: String(req.query.q || '').trim().slice(0, 100), estado: String(req.query.estado || '') };
-    const todos = db.listarLeads(5000);
-    let leads = todos;
+    const todosConPapelera = db.listarLeads(5000);
+    // La papelera queda fuera de las listas de trabajo; se ve con el filtro «Papelera»
+    const papelera = todosConPapelera.filter((l) => l.papelera_at);
+    const todos = todosConPapelera.filter((l) => !l.papelera_at);
+    let leads = filtros.estado === 'papelera' ? papelera : todos;
     if (filtros.estado && vistas.ETIQUETAS_ESTADO[filtros.estado]) leads = leads.filter((l) => l.estado === filtros.estado);
     if (filtros.q) {
       const q = sinTildes(filtros.q);
@@ -949,7 +958,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       .visitasSinResultado(hoy, sumarDias(hoy, -30))
       .filter((v) => v.fecha < hoy || v.hora * 60 + config.agenda.duracionMinutos <= minutos);
     const recordados = req.query.recordados !== undefined ? Number(req.query.recordados) || 0 : null;
-    res.send(vistas.panel({ leads: leads.slice(0, 300), todos, visitas: db.listarVisitas(hoy), sinResultado, recordados, hoy, filtros, eliminado, config }));
+    res.send(vistas.panel({ leads: leads.slice(0, 300), todos, visitas: db.listarVisitas(hoy), sinResultado, recordados, hoy, filtros, eliminado, enPapelera: papelera.length, config }));
   });
 
   // Planilla para Excel (separador ";" y BOM para que Excel en español abra bien los acentos)
@@ -1286,8 +1295,17 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     res.redirect(303, `/admin/lead/${lead.id}?ok=datos_pedidos`);
   });
 
+  // Sacar de la papelera a mano (por ejemplo, si llamó y sigue interesado)
+  app.post('/admin/lead/:id/papelera', formAdmin, (req, res) => {
+    const lead = leadAdmin(req, res);
+    if (!lead) return;
+    if (req.body?.accion === 'sacar') db.sacarDePapelera(lead.id);
+    else db.aPapelera(lead.id, String(req.body?.motivo || 'Movido a la papelera por el equipo').trim());
+    res.redirect(303, `/admin/lead/${lead.id}`);
+  });
+
   // Recordarle al interesado aprobado que elija su horario de visita
-  const esperaAgenda = (l) => l.estado === 'aprobado' && l.email && !db.visitaVigente(l.id);
+  const esperaAgenda = (l) => l.estado === 'aprobado' && l.email && !l.papelera_at && !db.visitaVigente(l.id);
   app.post('/admin/lead/:id/recordar-agenda', formAdmin, async (req, res) => {
     const lead = leadAdmin(req, res);
     if (!lead) return;

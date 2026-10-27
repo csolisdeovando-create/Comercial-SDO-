@@ -1476,3 +1476,43 @@ test('indicadores: embudo, actividad y JSON con clave para el panel de Cristian'
   t.after(() => sin.server.close());
   assert.strictEqual((await fetch(`${sin.url}/api/indicadores?token=x`)).status, 404);
 });
+
+test('papelera: canceló, no asistió o no continúa sale de las listas; vuelve si agenda de nuevo', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const post = (ruta, datos) => fetch(ctx.url + ruta, { method: 'POST', headers: h, body: new URLSearchParams(datos), redirect: 'manual' });
+  const panel = async (q = '') => (await fetch(`${ctx.url}/admin${q}`, { headers: h })).text();
+  const ana = ctx.db.crearLead({ telefono: '56911112222', nombre: 'Ana Cancela', email: 'ana@example.com', estado: 'aprobado', aprobado_at: '2026-10-14T12:00:00Z' });
+  const beto = ctx.db.crearLead({ telefono: '56933334444', nombre: 'Beto Falta', email: 'beto@example.com', estado: 'aprobado', aprobado_at: '2026-10-14T12:00:00Z' });
+
+  // Ana agenda y cancela: a la papelera, no a "Esperando agenda"
+  await fetch(`${ctx.url}/agendar/${ana.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|10' }) });
+  await fetch(`${ctx.url}/visita/${ana.token}/cancelar`, { method: 'POST', body: new URLSearchParams({ motivo: 'Encontré otra' }) });
+  assert.match(ctx.db.leadPorId(ana.id).papelera_motivo, /Canceló su visita: Encontré otra/);
+  let html = await panel();
+  assert.doesNotMatch(html, /Ana Cancela/);
+  assert.match(html, /<strong>1<\/strong><span>🗑️ Papelera<\/span>/);
+  assert.match(await panel('?estado=papelera'), /Ana Cancela[\s\S]*🗑️ Canceló su visita/);
+  // Recordar a todos no le escribe
+  const antes = ctx.correos.length;
+  await post('/admin/recordar-agenda', {});
+  assert.ok(!ctx.correos.slice(antes).some((c) => c.to === 'ana@example.com'));
+
+  // Beto no asiste: a la papelera
+  const v = ctx.db.crearVisita(beto.id, '2026-10-15', 11);
+  await post(`/admin/lead/${beto.id}/visita`, { resultado: 'no_asistio' });
+  assert.strictEqual(ctx.db.visitaPorId(v.id).resultado, 'no_asistio');
+  assert.match(ctx.db.leadPorId(beto.id).papelera_motivo, /No asistió/);
+  assert.match(await (await fetch(`${ctx.url}/admin/lead/${beto.id}`, { headers: h })).text(), /En la papelera/);
+
+  // Ana vuelve a agendar con su link: sale sola de la papelera
+  await fetch(`${ctx.url}/agendar/${ana.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|12' }) });
+  assert.strictEqual(ctx.db.leadPorId(ana.id).papelera_at, null);
+  assert.match(await panel(), /Ana Cancela/);
+  // El equipo saca a Beto a mano
+  await post(`/admin/lead/${beto.id}/papelera`, { accion: 'sacar' });
+  assert.strictEqual(ctx.db.leadPorId(beto.id).papelera_at, null);
+  await post(`/admin/lead/${beto.id}/papelera`, { accion: 'mover' });
+  assert.ok(ctx.db.leadPorId(beto.id).papelera_at);
+});

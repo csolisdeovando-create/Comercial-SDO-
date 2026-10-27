@@ -400,3 +400,9 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 .cal-panel thead .boton-bloquear.abrir { color: #fff; border-color: #7be0a4; }
 .acciones-sabado { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .visita .res.sin-confirmar { color: #9a6b00; font-weight: 500; }
+
+/* Papelera: cancelaron, no asistieron o no continúan */
+.cifra.papelera strong { color: var(--suave); }
+.estado.papelera { background: #eceff1; color: #546e7a; }
+.alerta.papelera form, form.en-linea { display: inline-block; margin-left: 8px; }
+form.mover-papelera { margin: 6px 0 10px; }

@@ -386,7 +386,7 @@ const opcPanel = (config, nav) => ({ empresa: config.empresa.nombre, ancho: 'anc
 const linkWhatsapp = (tel) => (tel ? `<a href="https://wa.me/${esc(tel)}" target="_blank">+${esc(tel)}</a>` : '—');
 const bloqueDeVisita = (v) => describirBloque(...v.split(' ').map((x, i) => (i ? Number(x) : x)));
 
-function panel({ leads, todos, visitas, sinResultado = [], recordados = null, hoy, filtros = {}, eliminado, config }) {
+function panel({ leads, todos, visitas, sinResultado = [], recordados = null, hoy, filtros = {}, eliminado, enPapelera = 0, config }) {
   const conteo = (e) => todos.filter((l) => l.estado === e).length;
   const deHoy = visitas.filter((v) => v.fecha === hoy);
   const resumen = [
@@ -395,10 +395,11 @@ function panel({ leads, todos, visitas, sinResultado = [], recordados = null, ho
     ['agendado', 'Con visita agendada', conteo('agendado')],
     ['hoy', 'Visitas hoy', deHoy.length],
     ['resultado', 'Por registrar resultado', sinResultado.length],
+    ['papelera', '🗑️ Papelera', enPapelera],
   ];
   const esperando = todos.filter((l) => l.estado === 'aprobado' && l.email);
   const filtrando = Boolean(filtros.q || filtros.estado);
-  const opcionesEstado = Object.entries(ETIQUETAS_ESTADO)
+  const opcionesEstado = [...Object.entries(ETIQUETAS_ESTADO), ['papelera', '🗑️ Papelera (cancelaron, no asistieron o no continúan)']]
     .map(([k, t]) => `<option value="${k}" ${filtros.estado === k ? 'selected' : ''}>${esc(t)}</option>`)
     .join('');
   const filaVisita = (v) =>
@@ -492,7 +493,7 @@ function panel({ leads, todos, visitas, sinResultado = [], recordados = null, ho
             ${l.duplicados ? `<br><span class="aviso-dup" title="Mismo teléfono o RUT que #${esc(l.duplicados)}">⚠️ Posible duplicado de ${l.duplicados.split(',').map((d) => `<a href="/admin/lead/${esc(d)}">#${esc(d)}</a>`).join(', ')}</span>` : ''}</td>
           <td>${linkWhatsapp(l.telefono)}</td>
           <td>${esc(l.portal || '—')}</td>
-          <td><span class="estado ${esc(l.estado)}">${esc(ETIQUETAS_ESTADO[l.estado] || l.estado)}</span>${l.visita ? `<br><small>${esc(bloqueDeVisita(l.visita))}</small>` : ''}</td>
+          <td>${l.papelera_at ? `<span class="estado papelera" title="${esc(l.papelera_motivo || '')}">🗑️ ${esc(l.papelera_motivo || 'Papelera')}</span>` : `<span class="estado ${esc(l.estado)}">${esc(ETIQUETAS_ESTADO[l.estado] || l.estado)}</span>`}${l.visita ? `<br><small>${esc(bloqueDeVisita(l.visita))}</small>` : ''}</td>
           <td>${l.n_documentos ? `<a href="/admin/lead/${l.id}#documentos">📎 ${l.n_documentos} archivo(s)</a>` : '<span class="nota">—</span>'}</td>
           <td class="acciones"><a class="boton chico" href="/admin/lead/${l.id}">Ver ficha</a></td>
         </tr>`
@@ -532,6 +533,12 @@ function fichaAdmin({ lead, documentos, visita, revisionDocs = null, disponibles
         </div>
       </div>
       ${lead.motivo_rechazo ? `<div class="alerta error">Motivo informado: ${esc(lead.motivo_rechazo)}</div>` : ''}
+      ${
+        lead.papelera_at
+          ? `<div class="alerta aviso papelera">🗑️ <strong>En la papelera</strong> desde el ${esc(fechaHora(lead.papelera_at))}${lead.papelera_motivo ? `: ${esc(lead.papelera_motivo)}` : ''}. No aparece en las listas de trabajo ni recibe recordatorios. Si vuelve a agendar con su link, sale sola.
+            <form method="post" action="/admin/lead/${lead.id}/papelera" class="en-linea"><input type="hidden" name="accion" value="sacar"><button class="boton chico">Sacar de la papelera</button></form></div>`
+          : `<form method="post" action="/admin/lead/${lead.id}/papelera" class="en-linea mover-papelera"><input type="hidden" name="accion" value="mover"><button class="boton chico" title="Ya no está interesado: sale de las listas de trabajo, sin borrar sus datos">🗑️ Mover a la papelera</button></form>`
+      }
       ${fichaLead(lead)}
       ${avisoDatosFaltantes(lead)}
       ${formPropiedad(lead, visita)}

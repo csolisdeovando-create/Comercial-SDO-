@@ -99,7 +99,7 @@ function calcularIndicadores({ leads, visitas, desde, hasta, hoy }) {
   const pasadas = visitas.filter((v) => v.estado === 'confirmada' && v.fecha < hoy);
   const pendientes = {
     porRevisar: leads.filter((l) => l.estado === 'documentos_recibidos').length,
-    esperandoAgenda: leads.filter((l) => l.estado === 'aprobado').length,
+    esperandoAgenda: leads.filter((l) => l.estado === 'aprobado' && !l.papelera_at).length,
     sinResultado: pasadas.filter((v) => !v.resultado).length,
     sinRegistrarEnBreal: visitas.filter((v) => v.estado === 'confirmada' && !v.breal_at && v.fecha >= desde).length,
   };

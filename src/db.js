@@ -124,6 +124,18 @@ function migrar(db) {
   if (!leads.includes('avisos_agenda')) db.exec('ALTER TABLE leads ADD COLUMN avisos_agenda INTEGER DEFAULT 0');
   if (!leads.includes('datos_pedidos_at')) db.exec('ALTER TABLE leads ADD COLUMN datos_pedidos_at TEXT');
   if (!leads.includes('rechazado_at')) db.exec('ALTER TABLE leads ADD COLUMN rechazado_at TEXT');
+  // Papelera: canceló su visita, no asistió o no continúa. Sale de las listas de trabajo sin borrarse
+  if (!leads.includes('papelera_at')) {
+    db.exec('ALTER TABLE leads ADD COLUMN papelera_at TEXT');
+    db.exec('ALTER TABLE leads ADD COLUMN papelera_motivo TEXT');
+    // Una sola vez: los que ya estaban así pasan a la papelera
+    db.exec(`UPDATE leads SET papelera_at = datetime('now'), papelera_motivo = CASE estado WHEN 'no_asistio' THEN 'No asistió a la visita' ELSE 'No continúa' END
+             WHERE estado IN ('no_asistio', 'no_continua')`);
+    db.exec(`UPDATE leads SET papelera_at = datetime('now'), papelera_motivo = 'Canceló su visita'
+             WHERE estado = 'aprobado' AND papelera_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM visitas v WHERE v.lead_id = leads.id AND v.estado = 'confirmada')
+               AND (SELECT v.cancelada_por FROM visitas v WHERE v.lead_id = leads.id ORDER BY v.id DESC LIMIT 1) = 'interesado'`);
+  }
   // Persona que complementa renta o es aval, y datos personales completos de ambos
   const personales = ['doc_tipo', 'nacionalidad', 'fecha_nacimiento', 'estado_civil', 'profesion', 'direccion_actual', 'comuna'];
   for (const col of [
@@ -282,6 +294,8 @@ function crearRepositorio(db) {
       db.prepare(`UPDATE visitas SET estado = 'reagendada' WHERE lead_id = ? AND estado = 'confirmada'`).run(leadId),
     crearVisita(leadId, fecha, hora, origen = null) {
       const r = db.prepare('INSERT INTO visitas (lead_id, fecha, hora, origen) VALUES (?,?,?,?)').run(leadId, fecha, hora, origen);
+      // Si vuelve a agendar (él o el equipo), sale de la papelera
+      db.prepare('UPDATE leads SET papelera_at = NULL, papelera_motivo = NULL WHERE id = ? AND papelera_at IS NOT NULL').run(leadId);
       return db.prepare('SELECT * FROM visitas WHERE id = ?').get(Number(r.lastInsertRowid));
     },
     listarVisitas: (desde) =>
@@ -331,6 +345,9 @@ function crearRepositorio(db) {
     marcarResultadoPedido: (visitaId) => db.prepare(`UPDATE visitas SET resultado_pedido_at = datetime('now') WHERE id = ?`).run(visitaId),
     visitaPorId: (id) => db.prepare('SELECT * FROM visitas WHERE id = ?').get(id),
     todasLasVisitas: () => db.prepare('SELECT * FROM visitas ORDER BY id').all(),
+    aPapelera: (leadId, motivo) =>
+      db.prepare("UPDATE leads SET papelera_at = datetime('now'), papelera_motivo = ? WHERE id = ?").run(String(motivo || '').slice(0, 300) || null, leadId),
+    sacarDePapelera: (leadId) => db.prepare('UPDATE leads SET papelera_at = NULL, papelera_motivo = NULL WHERE id = ?').run(leadId),
     todosLosLeads: () => db.prepare('SELECT * FROM leads ORDER BY id').all(),
     marcarBreal: (visitaId, registrada) =>
       db.prepare(`UPDATE visitas SET breal_at = ${registrada ? "datetime('now')" : 'NULL'} WHERE id = ?`).run(visitaId),
