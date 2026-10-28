@@ -460,15 +460,62 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       );
     },
 
-    // El interesado confirmó desde el recordatorio: se actualiza el evento del equipo (título con ✅ CONFIRMADA)
-    async asistenciaConfirmada(lead, visita) {
+    // El equipo le pide al interesado que confirme (botón en el calendario o la ficha)
+    async pedirConfirmacion(lead, visita) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      const confirmar = `${config.baseUrl}/visita/${lead.token}/confirmar`;
+      await mailer.enviar({
+        to: lead.email,
+        subject: `Confirma tu visita: ${cuando} – ${config.empresa.nombre}`,
+        html: correoHTML(
+          'Confirma tu visita',
+          `<p>Hola ${esc(primerNombre(lead))},</p><p>Tienes una visita agendada:</p>
+           <p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
+           ${lead.propiedad ? `<p>🏠 ${esc(lead.propiedad)}</p>` : ''}
+           <p>Por favor confírmanos tu asistencia, o elige otro horario si no puedes asistir:</p>
+           ${boton('✅ Confirmar asistencia', confirmar)} ${boton('📅 Cambiar horario', linkAgenda(lead), '#111417')}
+           <p style="font-size:13px;color:#5a6478">¿Ya no puedes ir? <a href="${esc(linkCancelar(lead))}">Cancelar la visita</a></p>`
+        ),
+      });
+      await enviarWhatsappSeguro(
+        lead,
+        `Hola ${primerNombre(lead)} 👋 Tienes una visita agendada: *${cuando}*.\n✅ Confírmanos tu asistencia: ${confirmar}\n📅 Si no puedes, cambia el horario: ${linkAgenda(lead)}`
+      );
+    },
+
+    // El equipo confirmó la visita (por ejemplo, tras llamarlo): se le avisa al interesado y se actualiza su calendario
+    async confirmadaPorEquipo(lead, visita) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      if (lead.email) {
+        await mailer
+          .enviar({
+            to: lead.email,
+            subject: `✅ Tu visita está confirmada: ${cuando} – ${config.empresa.nombre}`,
+            html: correoHTML(
+              'Visita confirmada',
+              `<p>Hola ${esc(primerNombre(lead))},</p><p>Te confirmamos tu visita:</p>
+               <p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
+               ${lead.propiedad ? `<p>🏠 ${esc(lead.propiedad)}</p>` : ''}
+               <p>Te esperamos. Si te surge un imprevisto, puedes cambiar el horario o cancelar:</p>
+               ${boton('📅 Cambiar horario', linkAgenda(lead), '#111417')} ${boton('❌ Cancelar visita', linkCancelar(lead), '#8c2a20')}`
+            ),
+            icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: this.eventoInteresado(lead, visita) },
+          })
+          .catch((e) => console.error('[correo] visita confirmada al interesado falló:', e.message));
+      }
+      await enviarWhatsappSeguro(lead, `✅ Hola ${primerNombre(lead)}, te confirmamos tu visita: *${cuando}*. Si necesitas cambiarla: ${linkAgenda(lead)}`);
+      await this.asistenciaConfirmada(lead, visita, { porEquipo: true });
+    },
+
+    // Visita confirmada (por el interesado o el equipo): se actualiza el evento del equipo (título con ✅)
+    async asistenciaConfirmada(lead, visita, { porEquipo = false } = {}) {
       const cuando = describirBloque(visita.fecha, visita.hora);
       await mailer.enviar({
         to: destinatarios(visita.fecha),
-        subject: `✅ Visita CONFIRMADA por el interesado: ${cuando} · ${lead.propiedad || ''} · ${lead.nombre}`,
+        subject: `✅ Visita CONFIRMADA ${porEquipo ? 'por el equipo' : 'por el interesado'}: ${cuando} · ${lead.propiedad || ''} · ${lead.nombre}`,
         html: correoHTML(
           'Visita confirmada',
-          `<p style="font-size:18px">✅ <strong>${esc(lead.nombre)}</strong> confirmó que asistirá el <strong>${esc(cuando)}</strong>.</p>
+          `<p style="font-size:18px">✅ <strong>${esc(lead.nombre)}</strong> ${porEquipo ? 'tiene su visita confirmada por el equipo para' : 'confirmó que asistirá'} el <strong>${esc(cuando)}</strong>.</p>
            <p>El evento de tu calendario se actualizó.</p>${tablaLead(lead)}
            <p>${boton('WhatsApp al interesado', `https://wa.me/${lead.telefono}`)} ${boton('Ver ficha', `${config.baseUrl}/admin/lead/${lead.id}`, '#111417')}</p>`
         ),

@@ -406,3 +406,9 @@ label select { display: block; width: 100%; margin-top: 4px; padding: 11px 12px;
 .estado.papelera { background: #eceff1; color: #546e7a; }
 .alerta.papelera form, form.en-linea { display: inline-block; margin-left: 8px; }
 form.mover-papelera { margin: 6px 0 10px; }
+
+/* Confirmar visitas pendientes desde el calendario o la ficha */
+.botones-confirmar { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+.botones-confirmar form { margin: 0; }
+.botones-confirmar .boton.chico { font-size: 12px; padding: 3px 8px; }
+.botones-confirmar .confirmar { border-color: #1f8a4c; color: #1f8a4c; }

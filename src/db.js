@@ -114,6 +114,9 @@ function migrar(db) {
   if (!visitas.includes('breal_at')) db.exec('ALTER TABLE visitas ADD COLUMN breal_at TEXT');
   // Motivo cuando no continúa (mismos valores de "Resultado de la Visita" en Breal)
   if (!visitas.includes('motivo_resultado')) db.exec('ALTER TABLE visitas ADD COLUMN motivo_resultado TEXT');
+  // El equipo le pide confirmar desde el calendario, o la confirma él (por ejemplo, tras llamarlo)
+  if (!visitas.includes('confirmacion_pedida_at')) db.exec('ALTER TABLE visitas ADD COLUMN confirmacion_pedida_at TEXT');
+  if (!visitas.includes('confirmada_por')) db.exec('ALTER TABLE visitas ADD COLUMN confirmada_por TEXT');
   const leads = columnas('leads');
   if (!leads.includes('url_publicacion')) db.exec('ALTER TABLE leads ADD COLUMN url_publicacion TEXT');
   if (!leads.includes('plazo_cambio')) db.exec('ALTER TABLE leads ADD COLUMN plazo_cambio TEXT');
@@ -330,6 +333,9 @@ function crearRepositorio(db) {
         .all(fecha),
     confirmarAsistencia: (visitaId) =>
       db.prepare(`UPDATE visitas SET confirmada_at = datetime('now') WHERE id = ? AND confirmada_at IS NULL`).run(visitaId),
+    confirmarPorEquipo: (visitaId) =>
+      db.prepare(`UPDATE visitas SET confirmada_at = datetime('now'), confirmada_por = 'equipo' WHERE id = ? AND confirmada_at IS NULL`).run(visitaId),
+    marcarConfirmacionPedida: (visitaId) => db.prepare(`UPDATE visitas SET confirmacion_pedida_at = datetime('now') WHERE id = ?`).run(visitaId),
     marcarRecordatorio: (visitaId) =>
       db.prepare(`UPDATE visitas SET recordatorio_at = datetime('now') WHERE id = ?`).run(visitaId),
     cancelarVisita: (visitaId, { por = 'equipo', motivo = null } = {}) =>

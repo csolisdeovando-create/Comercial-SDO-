@@ -375,6 +375,16 @@ const RESULTADO_VISITA = {
 const fechaHora = (iso) =>
   iso ? new Date(`${String(iso).replace(' ', 'T')}${/Z|[+-]\d\d:?\d\d$/.test(iso) ? '' : 'Z'}`).toLocaleString('es-CL', { timeZone: 'America/Santiago', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 
+// Botones para confirmar una visita pendiente: pedírsela al interesado o confirmarla el equipo (le llega aviso)
+const botonesConfirmar = (v, { volver = '', semana = 0, email = v.email } = {}) => {
+  const campos = `${volver ? `<input type="hidden" name="volver" value="${esc(volver)}"><input type="hidden" name="semana" value="${Number(semana) || 0}">` : ''}`;
+  return `<div class="botones-confirmar">${
+    email
+      ? `<form method="post" action="/admin/visita/${v.id}/pedir-confirmacion">${campos}<button class="boton chico" title="Le llega un correo para que confirme su asistencia">📨 ${v.confirmacion_pedida_at ? 'Pedir de nuevo' : 'Pedir confirmación'}</button></form>`
+      : ''
+  }<form method="post" action="/admin/visita/${v.id}/confirmar">${campos}<button class="boton chico confirmar" title="Ya confirmó (por ejemplo, por teléfono): queda en verde y le llega la confirmación">✅ Confirmar visita</button></form></div>`;
+};
+
 // Casilla para que Bárbara marque que ya registró la visita en Breal
 const casillaBreal = (v) =>
   `<form method="post" action="/admin/visita/${v.id}/breal" class="form-breal">
@@ -896,7 +906,14 @@ function seccionVisita(lead, visita, disponibles) {
   return `<section class="tarjeta" id="visita">
     <div class="titulo-seccion">
       <div><h1>Visita</h1><p class="cuando-visita">📅 ${esc(cuando)}</p>
-      <p class="${visita.confirmada_at ? 'confirmo' : 'nota'}">${visita.confirmada_at ? '✅ El interesado confirmó su asistencia' : '⏳ El interesado aún no confirma (se le pide al agendar y el día anterior). Cuando confirme, la visita queda en verde en el calendario.'}</p>
+      <p class="${visita.confirmada_at ? 'confirmo' : 'nota'}">${
+        visita.confirmada_at
+          ? visita.confirmada_por === 'equipo'
+            ? '✅ Visita confirmada por el equipo (se le avisó al interesado)'
+            : '✅ El interesado confirmó su asistencia'
+          : `⏳ El interesado aún no confirma (se le pide al agendar y el día anterior${visita.confirmacion_pedida_at ? `; el equipo se la pidió el ${esc(fechaHora(visita.confirmacion_pedida_at))}` : ''}). Cuando confirme, la visita queda en verde en el calendario.`
+      }</p>
+      ${!visita.confirmada_at && !visita.resultado && visita.estado === 'confirmada' && visita.fecha >= new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago' }).format(new Date()) ? botonesConfirmar(visita, { email: lead.email }) : ''}
       ${lead.propiedad ? `<p class="nota">🏠 ${esc(lead.propiedad)}</p>` : ''}</div>
       ${visita.resultado ? `<span class="estado ${visita.resultado === 'realizada' ? 'agendado' : visita.resultado === 'no_continua' ? 'rechazado' : 'documentos_recibidos'}">${RESULTADO_VISITA[visita.resultado]}</span>` : '<span class="estado aprobado">Pendiente</span>'}
     </div>
@@ -1061,7 +1078,13 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   const botonAgregar = (f, h) => `<a class="boton-agregar" href="/admin/visita/nueva?fecha=${f}&amp;hora=${h}" title="Ingresar una visita a esta hora">＋<span class="txt"> Agendar</span></a>`;
   // Pendiente: si ya se le pidió confirmar (recordatorio) o si no tiene correo y hay que llamarlo
   const sinConfirmar = (v) =>
-    !v.email ? '⏳ Sin confirmar · sin correo: llamarlo' : v.recordatorio_at ? '⏳ Sin confirmar · ya se le pidió' : '⏳ Sin confirmar';
+    !v.email
+      ? '⏳ Sin confirmar · sin correo: llamarlo'
+      : v.confirmacion_pedida_at
+        ? `⏳ Sin confirmar · pedida ${fechaHora(v.confirmacion_pedida_at)}`
+        : v.recordatorio_at
+          ? '⏳ Sin confirmar · ya se le pidió'
+          : '⏳ Sin confirmar';
   const estadoVisita = (v) => (v.resultado ? 'realizada' : v.confirmada_at ? 'confirmada' : 'pendiente');
   const tarjetaVisita = (v) => `<a class="visita ${estadoVisita(v)}" href="/admin/lead/${v.lead_id}">
       <strong>${esc(v.nombre || 'Interesado')}</strong>
@@ -1094,7 +1117,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
       bl,
       enHorario: enHorario || (cerrado && futuro),
       cerrado,
-      html: `${vs.map(tarjetaVisita).join('')}${
+      html: `${vs.map((v) => tarjetaVisita(v) + (!v.resultado && !v.confirmada_at && f >= hoy ? botonesConfirmar(v, { volver: 'calendario', semana: desplazamiento }) : '')).join('')}${
         bl ? `<div class="bloqueo">🔒 ${esc(bl.motivo || 'Bloqueado')}${bl.hora !== null && futuro ? botonDesbloquear(bl) : ''}</div>` : acciones
       }`,
     };

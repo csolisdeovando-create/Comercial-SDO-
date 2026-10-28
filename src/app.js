@@ -1221,6 +1221,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     resultado: 'Resultado de la visita guardado.',
     resultado_aviso: 'Resultado guardado y mensaje enviado al interesado.',
     recordado: 'Le enviamos al interesado un recordatorio para que agende su visita.',
+    confirmacion_pedida: 'Le pedimos al interesado que confirme su visita.',
+    confirmada_equipo: 'Visita confirmada. Se le avisó al interesado y se actualizó el calendario del equipo.',
+    sin_correo: 'El interesado no tiene correo: confírmale por teléfono o WhatsApp y usa «Confirmar visita».',
     datos_pedidos: 'Le enviamos al interesado el link para que complete sus datos.',
     cancelada: 'Visita cancelada. El horario quedó libre.',
     cancelada_aviso: 'Visita cancelada. Le enviamos al interesado el link para elegir otro horario.',
@@ -1280,6 +1283,31 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   });
 
   // Casilla "Registrado en Breal" de cada visita (Breal no está conectado: es solo un control del equipo)
+  // Confirmación desde el calendario o la ficha: pedírsela al interesado, o confirmarla el equipo (le llega aviso)
+  const volverVisita = (req, visita) => (req.body?.volver === 'calendario' ? `/admin/calendario?semana=${parseInt(req.body?.semana, 10) || 0}` : `/admin/lead/${visita.lead_id}`);
+  const visitaPorConfirmar = (id) => {
+    const v = db.visitaPorId(Number(id));
+    return v && v.estado === 'confirmada' && !v.resultado && !v.confirmada_at && v.fecha >= hoyChile() ? v : null;
+  };
+  app.post('/admin/visita/:id/pedir-confirmacion', formAdmin, async (req, res) => {
+    const visita = visitaPorConfirmar(req.params.id);
+    if (!visita) return res.redirect(303, '/admin/calendario');
+    const lead = db.leadPorId(visita.lead_id);
+    if (lead?.email) {
+      await notif.pedirConfirmacion(lead, visita).catch((e) => console.error('[panel] pedir confirmación:', e));
+      db.marcarConfirmacionPedida(visita.id);
+    }
+    res.redirect(303, `${volverVisita(req, visita)}${req.body?.volver === 'calendario' ? '' : `?ok=${lead?.email ? 'confirmacion_pedida' : 'sin_correo'}#visita`}`);
+  });
+  app.post('/admin/visita/:id/confirmar', formAdmin, async (req, res) => {
+    const visita = visitaPorConfirmar(req.params.id);
+    if (!visita) return res.redirect(303, '/admin/calendario');
+    db.confirmarPorEquipo(visita.id);
+    const lead = db.leadPorId(visita.lead_id);
+    await notif.confirmadaPorEquipo(lead, db.visitaPorId(visita.id)).catch((e) => console.error('[panel] confirmar visita:', e));
+    res.redirect(303, `${volverVisita(req, visita)}${req.body?.volver === 'calendario' ? '' : '?ok=confirmada_equipo#visita'}`);
+  });
+
   app.post('/admin/visita/:id/breal', formAdmin, (req, res) => {
     const visita = db.visitaPorId(Number(req.params.id));
     if (visita) db.marcarBreal(visita.id, req.body?.registrada === '1');

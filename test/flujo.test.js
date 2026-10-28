@@ -1516,3 +1516,48 @@ test('papelera: canceló, no asistió o no continúa sale de las listas; vuelve 
   await post(`/admin/lead/${beto.id}/papelera`, { accion: 'mover' });
   assert.ok(ctx.db.leadPorId(beto.id).papelera_at);
 });
+
+test('confirmar desde el calendario: pedir confirmación al interesado o confirmarla el equipo (le llega aviso)', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const post = (ruta, datos) => fetch(ctx.url + ruta, { method: 'POST', headers: h, body: new URLSearchParams(datos), redirect: 'manual' });
+  const lead = ctx.db.crearLead({ telefono: '56955556666', nombre: 'Carla Pide', email: 'carla@example.com', propiedad: 'Rosario Sur 91', estado: 'agendado' });
+  const v = ctx.db.crearVisita(lead.id, '2026-10-16', 10);
+  let cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(cal, /📨 Pedir confirmación/);
+  assert.match(cal, /✅ Confirmar visita/);
+
+  // Pedir confirmación: le llega un correo con el botón
+  let antes = ctx.correos.length;
+  let r = await post(`/admin/visita/${v.id}/pedir-confirmacion`, { volver: 'calendario', semana: '0' });
+  assert.strictEqual(r.status, 303);
+  assert.match(r.headers.get('location'), /\/admin\/calendario/);
+  const pedido = ctx.correos.slice(antes).find((c) => c.to === 'carla@example.com');
+  assert.match(pedido.subject, /Confirma tu visita/);
+  assert.match(pedido.html, /\/visita\/[^"]+\/confirmar/);
+  assert.ok(ctx.db.visitaPorId(v.id).confirmacion_pedida_at);
+  cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(cal, /Sin confirmar · pedida/);
+  assert.match(cal, /📨 Pedir de nuevo/);
+
+  // El equipo la confirma: queda en verde, al interesado le llega la confirmación y al equipo el evento con ✅
+  antes = ctx.correos.length;
+  r = await post(`/admin/visita/${v.id}/confirmar`, {});
+  assert.match(r.headers.get('location'), /ok=confirmada_equipo/);
+  const nuevos = ctx.correos.slice(antes);
+  assert.match(nuevos.find((c) => c.to === 'carla@example.com').subject, /Tu visita está confirmada/);
+  const equipo = nuevos.find((c) => /CONFIRMADA por el equipo/.test(c.subject));
+  assert.match(equipo.icalEvent.content.replace(/\r\n /g, ''), /SUMMARY:✅ 🏠 Rosario Sur 91/);
+  const vc = ctx.db.visitaPorId(v.id);
+  assert.ok(vc.confirmada_at);
+  assert.strictEqual(vc.confirmada_por, 'equipo');
+  cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(cal, /✅ Confirmó asistencia/);
+  assert.doesNotMatch(cal, /Confirmar visita/);
+  assert.match(await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text(), /confirmada por el equipo/);
+  // Confirmar de nuevo no repite correos
+  antes = ctx.correos.length;
+  await post(`/admin/visita/${v.id}/confirmar`, {});
+  assert.strictEqual(ctx.correos.length, antes);
+});
