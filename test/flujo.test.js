@@ -280,7 +280,8 @@ test('panel: ficha con documentos, ZIP y calendario de visitas', async (t) => {
   assert.strictEqual(r.status, 303);
   const cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: auth })).text();
   assert.match(cal, /1 visita\(s\) esta semana/);
-  assert.match(cal, new RegExp(`href="/admin/lead/${lead.id}"[^>]*>\\s*<strong>Juan Pérez Soto</strong>`));
+  assert.match(cal, new RegExp(`class="nombre" href="/admin/lead/${lead.id}">Juan Pérez Soto</a>`));
+  assert.doesNotMatch(cal, /✉️/, 'el correo no ocupa espacio en el calendario');
   const sig = await (await fetch(`${ctx.url}/admin/calendario?semana=1`, { headers: auth })).text();
   assert.match(sig, /Sin visitas esta semana/);
 });
@@ -577,7 +578,7 @@ test('evento de calendario del equipo: información completa, confirmación, rea
   const ev2 = conf.icalEvent.content.replace(/\r\n /g, '');
   assert.match(ev2, /SUMMARY:✅ 🏠 Rosario Sur 91/);
   assert.strictEqual(ev2.match(/UID:(.*)/)[1], uid, 'mismo evento');
-  assert.match(await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text(), /✅ Confirmó asistencia/);
+  assert.match(await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text(), /<span class="res">✅ Confirmó<\/span>/);
   assert.match(await (await fetch(`${ctx.url}/visita/${lead.token}/confirmar`)).text(), /Ya confirmaste/);
   assert.match(await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text(), /El interesado confirmó su asistencia/);
 
@@ -935,7 +936,7 @@ test('visita ingresada a mano desde el panel (agendada por otro medio)', async (
   assert.ok(ctx.correos.some((c) => c.to === 'pedro@example.com'), 'confirmación al interesado');
   cal = await (await fetch(`${ctx.url}${r.headers.get('location')}`, { headers: h })).text();
   assert.match(cal, /Visita de <strong>Pedro Soto<\/strong> ingresada/);
-  assert.match(cal, /✍️ Llamada telefónica/);
+  assert.match(cal, /Ingresada a mano \(Llamada telefónica\)/);
 
   // El horario queda ocupado para quienes agendan por el link
   const otro = ctx.db.crearLead({ telefono: '56933334444', nombre: 'Ana', email: 'ana@example.com', estado: 'aprobado' });
@@ -1051,8 +1052,8 @@ test('link pegado en la dirección: se corrige en las fichas existentes y se rec
   const lead = ctx.db.crearLead({ telefono: '56996704082', nombre: 'Nicolas', propiedad: 'Edificio cicarelli · Mercado Libre (falta dirección)', url_publicacion: ML, estado: 'agendado' });
   ctx.db.crearVisita(lead.id, '2026-10-16', 17);
   const cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
-  assert.match(cal, /class="prop falta">🏠 Edificio cicarelli/);
-  assert.doesNotMatch(cal, /mercadolibre\.cl/);
+  assert.match(cal, /🔗 Ver aviso · Edificio cicarelli/); // el link se abre con un toque, sin mostrarse como texto
+  assert.doesNotMatch(cal, />[^<]*mercadolibre\.cl/);
   const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
   assert.match(ficha, /Falta la dirección exacta/);
   assert.match(ficha, /<details class="editar-propiedad" open>/);
@@ -1525,8 +1526,8 @@ test('confirmar desde el calendario: pedir confirmación al interesado o confirm
   const lead = ctx.db.crearLead({ telefono: '56955556666', nombre: 'Carla Pide', email: 'carla@example.com', propiedad: 'Rosario Sur 91', estado: 'agendado' });
   const v = ctx.db.crearVisita(lead.id, '2026-10-16', 10);
   let cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
-  assert.match(cal, /📨 Pedir confirmación/);
-  assert.match(cal, /✅ Confirmar visita/);
+  assert.match(cal, /📨 Pedir<\/button>/);
+  assert.match(cal, /✅ Confirmar<\/button>/);
 
   // Pedir confirmación: le llega un correo con el botón
   let antes = ctx.correos.length;
@@ -1538,8 +1539,8 @@ test('confirmar desde el calendario: pedir confirmación al interesado o confirm
   assert.match(pedido.html, /\/visita\/[^"]+\/confirmar/);
   assert.ok(ctx.db.visitaPorId(v.id).confirmacion_pedida_at);
   cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
-  assert.match(cal, /Sin confirmar · pedida/);
-  assert.match(cal, /📨 Pedir de nuevo/);
+  assert.match(cal, /⏳ Pedida /);
+  assert.match(cal, /📨 Pedir otra vez/);
 
   // El equipo la confirma: queda en verde, al interesado le llega la confirmación y al equipo el evento con ✅
   antes = ctx.correos.length;
@@ -1553,8 +1554,8 @@ test('confirmar desde el calendario: pedir confirmación al interesado o confirm
   assert.ok(vc.confirmada_at);
   assert.strictEqual(vc.confirmada_por, 'equipo');
   cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
-  assert.match(cal, /✅ Confirmó asistencia/);
-  assert.doesNotMatch(cal, /Confirmar visita/);
+  assert.match(cal, /✅ Confirmó</);
+  assert.doesNotMatch(cal, /✅ Confirmar<\/button>/);
   assert.match(await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text(), /confirmada por el equipo/);
   // Confirmar de nuevo no repite correos
   antes = ctx.correos.length;

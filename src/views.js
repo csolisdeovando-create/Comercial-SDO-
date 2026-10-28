@@ -380,9 +380,9 @@ const botonesConfirmar = (v, { volver = '', semana = 0, email = v.email } = {}) 
   const campos = `${volver ? `<input type="hidden" name="volver" value="${esc(volver)}"><input type="hidden" name="semana" value="${Number(semana) || 0}">` : ''}`;
   return `<div class="botones-confirmar">${
     email
-      ? `<form method="post" action="/admin/visita/${v.id}/pedir-confirmacion">${campos}<button class="boton chico" title="Le llega un correo para que confirme su asistencia">📨 ${v.confirmacion_pedida_at ? 'Pedir de nuevo' : 'Pedir confirmación'}</button></form>`
+      ? `<form method="post" action="/admin/visita/${v.id}/pedir-confirmacion">${campos}<button class="boton chico" title="Le llega un correo para que confirme su asistencia">📨 ${volver ? (v.confirmacion_pedida_at ? 'Pedir otra vez' : 'Pedir') : v.confirmacion_pedida_at ? 'Pedir de nuevo' : 'Pedir confirmación'}</button></form>`
       : ''
-  }<form method="post" action="/admin/visita/${v.id}/confirmar">${campos}<button class="boton chico confirmar" title="Ya confirmó (por ejemplo, por teléfono): queda en verde y le llega la confirmación">✅ Confirmar visita</button></form></div>`;
+  }<form method="post" action="/admin/visita/${v.id}/confirmar">${campos}<button class="boton chico confirmar" title="Ya confirmó (por ejemplo, por teléfono): queda en verde y le llega la confirmación">✅ ${volver ? 'Confirmar' : 'Confirmar visita'}</button></form></div>`;
 };
 
 // Casilla para que Bárbara marque que ya registró la visita en Breal
@@ -1079,21 +1079,33 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   // Pendiente: si ya se le pidió confirmar (recordatorio) o si no tiene correo y hay que llamarlo
   const sinConfirmar = (v) =>
     !v.email
-      ? '⏳ Sin confirmar · sin correo: llamarlo'
+      ? '⏳ Sin confirmar · llamar'
       : v.confirmacion_pedida_at
-        ? `⏳ Sin confirmar · pedida ${fechaHora(v.confirmacion_pedida_at)}`
+        ? `⏳ Pedida ${fechaHora(v.confirmacion_pedida_at)}`
         : v.recordatorio_at
-          ? '⏳ Sin confirmar · ya se le pidió'
+          ? '⏳ Sin confirmar (se le pidió)'
           : '⏳ Sin confirmar';
   const estadoVisita = (v) => (v.resultado ? 'realizada' : v.confirmada_at ? 'confirmada' : 'pendiente');
-  const tarjetaVisita = (v) => `<a class="visita ${estadoVisita(v)}" href="/admin/lead/${v.lead_id}">
-      <strong>${esc(v.nombre || 'Interesado')}</strong>
-      ${v.propiedad ? `<span class="prop ${faltaDireccion(v.propiedad) ? 'falta' : ''}">🏠 ${esc(v.propiedad)}</span>` : '<span class="prop falta">🏠 Dirección por confirmar</span>'}
-      <span class="tel">📞 +${esc(v.telefono || '')}</span>
-      ${v.email ? `<span class="correo">✉️ ${esc(v.email)}</span>` : ''}
-      ${v.resultado ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>` : v.confirmada_at ? '<span class="res">✅ Confirmó asistencia</span>' : `<span class="res sin-confirmar">${sinConfirmar(v)}</span>`}
-      ${v.origen === 'equipo' ? `<span class="tag-manual" title="Ingresada a mano por el equipo">✍️ ${esc(v.portal || 'Manual')}</span>` : ''}
-    </a>`;
+  // Tarjeta compacta para que Julio vea rápido sus visitas: nombre, dirección (o link del aviso), celular y confirmación
+  const tarjetaVisita = (v) => {
+    const sinDireccion = !v.propiedad || faltaDireccion(v.propiedad);
+    const lugar = !sinDireccion
+      ? `<span class="prop">🏠 ${esc(v.propiedad)}</span>`
+      : v.url_publicacion
+        ? `<a class="prop link-aviso" href="${esc(v.url_publicacion)}" target="_blank" rel="noopener">🔗 Ver aviso${v.propiedad ? ` · ${esc(v.propiedad.split(' · ')[0])}` : ''}</a>`
+        : '<span class="prop falta">🏠 Dirección por confirmar</span>';
+    const estado = v.resultado
+      ? `<span class="res">${RESULTADO_VISITA[v.resultado]}</span>`
+      : v.confirmada_at
+        ? '<span class="res">✅ Confirmó</span>'
+        : `<span class="res sin-confirmar">${sinConfirmar(v)}</span>`;
+    return `<div class="visita ${estadoVisita(v)}" title="${v.origen === 'equipo' ? `Ingresada a mano (${esc(v.portal || 'Manual')})` : esc(v.portal || '')}">
+      <a class="nombre" href="/admin/lead/${v.lead_id}">${esc(v.nombre || 'Interesado')}</a>
+      ${lugar}
+      <a class="tel" href="tel:+${esc(v.telefono || '')}">📞 +${esc(v.telefono || '')}</a>
+      ${estado}
+    </div>`;
+  };
   const cuantas = (f) => visitas.filter((v) => v.fecha === f).length;
 
   // Celda (escritorio) o fila (celular) de un horario

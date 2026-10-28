@@ -313,7 +313,7 @@ function crearRepositorio(db) {
     visitasEntre: (desde, hasta) =>
       db
         .prepare(
-          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.tipo, l.portal FROM visitas v
+          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.url_publicacion, l.tipo, l.portal FROM visitas v
            JOIN leads l ON l.id = v.lead_id WHERE v.estado = 'confirmada' AND v.fecha BETWEEN ? AND ?
            ORDER BY v.fecha, v.hora`
         )
