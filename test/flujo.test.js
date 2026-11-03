@@ -235,8 +235,8 @@ test('archivos grandes: se adjunta lo que cabe y el resto va como link', async (
   assert.match(correo.html, /1 archivo\(s\) no se adjuntaron/);
 });
 
-test('el máximo por archivo por defecto es 30 MB', () => {
-  assert.strictEqual(cargarConfig({}).archivos.maxMB, 30);
+test('el máximo por archivo por defecto es 50 MB', () => {
+  assert.strictEqual(cargarConfig({}).archivos.maxMB, 50);
 });
 
 test('panel: ficha con documentos, ZIP y calendario de visitas', async (t) => {

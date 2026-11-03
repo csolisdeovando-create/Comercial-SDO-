@@ -100,7 +100,7 @@ function cargarConfig(env = process.env) {
     indicadoresToken: env.INDICADORES_TOKEN || '',
 
     archivos: {
-      maxMB: Number(env.ARCHIVO_MAX_MB || 30),
+      maxMB: Number(env.ARCHIVO_MAX_MB || 50),
       maxPorRequisito: Number(env.ARCHIVO_MAX_POR_REQUISITO || 6),
     },
   };
