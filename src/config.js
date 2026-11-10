@@ -103,7 +103,7 @@ function cargarConfig(env = process.env) {
       empresa: env.VENTA_EMPRESA_NOMBRE || 'SDO Capital',
       pieMinimo: Number(env.VENTA_PIE_MINIMO || 0.2), // 20% del precio
       // Pie según el precio: "hasta_uf:porcentaje" separados por coma, ej "2500:0.1,4000:0.15" (sobre el último tramo, pieMinimo)
-      pieTramos: lista(env.VENTA_PIE_TRAMOS, '')
+      pieTramos: lista(env.VENTA_PIE_TRAMOS, '1500:0.1')
         .map((t) => t.split(':').map(Number))
         .filter(([hasta, pct]) => hasta > 0 && pct > 0 && pct <= 1)
         .sort((a, b) => a[0] - b[0]),
