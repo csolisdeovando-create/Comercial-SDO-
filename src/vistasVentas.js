@@ -14,6 +14,7 @@ const ETAPAS = ['oferta', 'reservado', 'promesa', 'escriturado'];
 const uf = (x) => (x === null || x === undefined || x === '' ? '—' : `${Number(x).toLocaleString('es-CL', { maximumFractionDigits: 1 })} UF`);
 const pesos = (x) => (x === null || x === undefined || x === '' ? '—' : `$${Math.round(Number(x)).toLocaleString('es-CL')}`);
 const opcCapital = (config, nav) => ({ ...vistas.opcPanel(config, nav), empresa: config.venta.empresa, marca: 'capital' });
+const { calcularIndicadoresVenta } = require('./indicadores');
 
 // Calificación de un interesado con el precio de su propiedad (del listado) o null si no hay datos
 function calificacionDe(lead, propiedad, config, valorUf) {
@@ -168,7 +169,7 @@ function formularioCompra({ lead, valores = {}, errores = [], propiedades = [], 
 }
 
 // ---------- Panel de ventas ----------
-function panelVentas({ leads, todos, papelera, propiedades, visitas, filtros = {}, desde, valorUf, recordados = null, config }) {
+function panelVentas({ leads, todos, papelera, propiedades, visitas, filtros = {}, desde, valorUf, recordados = null, proximas = [], config }) {
   const propDe = (l) => propiedades.find((p) => p.id === l.propiedad_venta_id) || null;
   const conteo = (f) => todos.filter(f).length;
   const resumen = [
@@ -223,20 +224,21 @@ function panelVentas({ leads, todos, papelera, propiedades, visitas, filtros = {
       ${resumen.map(([e, t, n]) => `<a class="cifra ${e} ${filtros.estado === e ? 'activa' : ''}" href="/admin/ventas?estado=${e}#interesados-venta"><strong>${n}</strong><span>${t}</span></a>`).join('')}
     </section>
     <section class="tarjeta">
-      <div class="titulo-seccion"><div><h1>🏢 SDO Capital · Ventas</h1><span class="nota">Interesados en comprar. Las visitas usan el mismo calendario que arriendos.</span></div>
-        <div class="acciones-ficha"><a class="boton chico" href="/admin/ventas/propiedades">🏢 Propiedades en venta (${propiedades.filter((p) => p.estado === 'disponible').length} disponibles)</a><a class="boton chico" href="/admin/calendario">📅 Calendario</a></div></div>
+      <div class="titulo-seccion"><div><h1>Panel de ventas</h1><span class="nota">Interesados en comprar departamentos. Las visitas usan el mismo calendario de Julio que arriendos, para que nunca se crucen.</span></div>
+        <div class="acciones-ficha"><a class="boton chico" href="/admin/ventas/propiedades">🏢 Propiedades (${propiedades.filter((p) => p.estado === 'disponible').length} disponibles)</a><a class="boton chico" href="/admin/ventas/indicadores">📊 Indicadores</a></div></div>
       <p class="nota">Link del formulario de compra para compartir: <a href="${esc(config.baseUrl)}/comprar" target="_blank">${esc(config.baseUrl)}/comprar</a></p>
     </section>
     <section class="tarjeta">
-      <h2>Embudo de compra · últimos 90 días</h2>
-      <p class="nota">Cada interesado que postuló, hasta dónde llegó. A la derecha: % del paso anterior y cuántos son 🏡 para vivir y 📈 para invertir.</p>
-      <div class="embudo">${etapas
-        .map(
-          ([t, n, vivir, invertir], i) => `<div class="etapa"><span class="nombre">${esc(t)}</span>
-          <div class="emb-barra"><div class="emb-relleno" style="width:${Math.max(2, Math.round((n / max) * 100))}%"></div></div>
-          <strong>${n}</strong><span class="conv">${i && etapas[i - 1][1] ? `${Math.round((n / etapas[i - 1][1]) * 100)}% · ` : ''}🏡 ${vivir} · 📈 ${invertir}</span></div>`
-        )
-        .join('')}</div>
+      <div class="titulo-seccion" id="proximas"><div><h1>Próximas visitas</h1>${proximas.length ? `<span class="nota">${proximas.filter((v) => !v.breal_at).length ? `${proximas.filter((v) => !v.breal_at).length} por registrar en Breal` : '✅ Todas registradas en Breal'}</span>` : ''}</div><a class="boton chico" href="/admin/calendario?negocio=venta">Ver calendario</a></div>
+      ${
+        proximas.length
+          ? `<div class="tabla-scroll"><table class="tabla tabla-movil"><thead><tr><th>Fecha</th><th>Hora</th><th>Interesado</th><th>Teléfono</th><th>Propiedad</th><th>Breal</th></tr></thead><tbody>
+          ${proximas
+            .slice(0, 20)
+            .map((v) => `<tr><td class="col-principal">${esc(v.fecha.split('-').reverse().join('-'))}</td><td>${String(v.hora).padStart(2, '0')}:00</td><td><a href="/admin/lead/${v.lead_id}">${esc(v.nombre)}</a></td><td>${vistas.linkWhatsapp(v.telefono)}</td><td class="col-prop">${esc(v.propiedad || '—')}</td><td class="col-breal">${vistas.casillaBreal(v)}</td></tr>`)
+            .join('')}</tbody></table></div>`
+          : '<p class="nota">No hay visitas de venta agendadas.</p>'
+      }
     </section>
     <section class="tarjeta" id="interesados-venta">
       <div class="titulo-seccion"><h1>Interesados en comprar</h1>
@@ -250,7 +252,7 @@ function panelVentas({ leads, todos, papelera, propiedades, visitas, filtros = {
       ${leads.length ? leads.map(filaLead).join('') : '<tr><td colspan="7" class="nota">Aún no hay interesados en comprar.</td></tr>'}
       </tbody></table></div>
     </section>`,
-    opcCapital(config, 'ventas')
+    opcCapital(config, 'leads')
   );
 }
 
@@ -269,8 +271,7 @@ function propiedadesVenta({ propiedades, aviso, config }) {
       <label class="ancho">Notas<input name="notas" value="${esc(p.notas || '')}"></label>`;
   return vistas.layout(
     'Propiedades en venta',
-    `<p class="migas"><a href="/admin/ventas">← SDO Capital · Ventas</a></p>
-    ${aviso ? `<div class="alerta ok">${esc(aviso)}</div>` : ''}
+    `${aviso ? `<div class="alerta ok">${esc(aviso)}</div>` : ''}
     <section class="tarjeta">
       <div class="titulo-seccion"><div><h1>🏢 Propiedades en venta</h1><span class="nota">Las disponibles aparecen en el formulario de compra para que el interesado elija. El pie mínimo de cada una se usa para calificar (puede ser desde 10%).</span></div></div>
       <div class="tabla-scroll"><table class="tabla tabla-movil"><thead><tr><th>Dirección</th><th>Precio</th><th>Pie mínimo</th><th>D/B</th><th>Estado</th><th></th></tr></thead><tbody>
@@ -299,7 +300,7 @@ function propiedadesVenta({ propiedades, aviso, config }) {
       <h2>Agregar propiedad</h2>
       <form method="post" action="/admin/ventas/propiedades" class="grilla">${campos()}<button class="boton primario">Agregar</button></form>
     </section>`,
-    opcCapital(config, 'ventas')
+    opcCapital(config, 'propiedades')
   );
 }
 
@@ -348,4 +349,80 @@ function seccionesCompraFicha(lead, config) {
   </div>`;
 }
 
-module.exports = { formularioCompra, panelVentas, propiedadesVenta, seccionesCompraFicha, calificacionDe, ESTADOS_PROPIEDAD, EN_NEGOCIACION };
+// ---------- Indicadores de venta ----------
+function indicadoresVenta({ datos: d, periodo, config }) {
+  const periodos = [['30', 'Últimos 30 días'], ['mes', 'Este mes'], ['mes_anterior', 'Mes anterior'], ['90', 'Últimos 90 días']];
+  const fechaCorta = (f) => f.split('-').reverse().join('-');
+  const max = d.embudo[0].cantidad || 1;
+  const cifra = (n, t, extra = '') => `<div class="cifra"><strong>${n ?? '—'}</strong><span>${t}</span>${extra ? `<small>${extra}</small>` : ''}</div>`;
+  const diasTxt = (x) => (x === null ? '—' : `${x} días`);
+  const a = d.actividad;
+  const tablaGrupo = (titulo, filas, col) =>
+    `<section class="tarjeta"><h2>${titulo}</h2>${
+      filas.length
+        ? `<div class="tabla-scroll"><table class="tabla"><thead><tr><th>${col}</th><th>Postularon</th><th>Aprobados</th><th>Visitaron</th><th>Reservaron</th><th>Escritura</th><th>Conversión</th></tr></thead><tbody>
+        ${filas.map((f) => `<tr><td>${esc(f.grupo)}</td><td>${f.postularon}</td><td>${f.aprobados}</td><td>${f.visitaron}</td><td>${f.reservaron}</td><td>${f.escrituraron}</td><td>${f.postularon ? `${Math.round((f.reservaron / f.postularon) * 100)}%` : '—'}</td></tr>`).join('')}
+        </tbody></table></div>`
+        : '<p class="nota">No hubo postulaciones de compra en el período.</p>'
+    }</section>`;
+  return vistas.layout(
+    'Indicadores de venta',
+    `<section class="tarjeta">
+      <div class="titulo-seccion"><div><h1>Indicadores de venta</h1><span class="nota">${esc(fechaCorta(d.periodo.desde))} al ${esc(fechaCorta(d.periodo.hasta))}</span></div>
+        <nav class="periodos">${periodos.map(([k, t]) => `<a class="boton chico ${periodo.clave === k ? 'primario' : ''}" href="/admin/ventas/indicadores?periodo=${k}">${t}</a>`).join('')}</nav></div>
+      <h2>Embudo de compra</h2>
+      <p class="nota">Cada interesado que postuló en el período, hasta dónde llegó. A la derecha: % del paso anterior y cuántos son 🏡 para vivir y 📈 para invertir.</p>
+      <div class="embudo">${d.embudo
+        .map(
+          (e, i) => `<div class="etapa"><span class="nombre">${esc(e.etapa)}</span>
+          <div class="emb-barra"><div class="emb-relleno" style="width:${Math.max(2, Math.round((e.cantidad / max) * 100))}%"></div></div>
+          <strong>${e.cantidad}</strong><span class="conv">${i && e.desdeAnterior !== null ? `${e.desdeAnterior}% · ` : ''}🏡 ${e.vivir} · 📈 ${e.invertir}</span></div>`
+        )
+        .join('')}</div>
+    </section>
+    <section class="resumen-estados">
+      ${cifra(a.ofertas, 'Ofertas en el período', a.ufOfertadas ? uf(a.ufOfertadas) : '')}
+      ${cifra(a.reservas, 'Reservas')}
+      ${cifra(a.promesas, 'Promesas')}
+      ${cifra(a.escrituras, 'Escrituras (vendidos)')}
+      ${cifra(a.visitasAgendadas, 'Visitas del período', `${a.realizadas} realizadas · ${a.noAsistio} no asistió`)}
+    </section>
+    <section class="tarjeta">
+      <h2>Tiempos (mediana)</h2>
+      <table class="ficha">
+        <tr><th>Postulación → aprobación</th><td>${diasTxt(d.tiempos.postulacionAAprobacion)}</td></tr>
+        <tr><th>Aprobación → visita</th><td>${diasTxt(d.tiempos.aprobacionAVisita)}</td></tr>
+        <tr><th>Visita → reserva</th><td>${diasTxt(d.tiempos.visitaAReserva)}</td></tr>
+        <tr><th>Reserva → escritura</th><td>${diasTxt(d.tiempos.reservaAEscritura)}</td></tr>
+      </table>
+    </section>
+    ${tablaGrupo('¿Para vivir o invertir?', d.porProposito, 'Propósito')}
+    ${tablaGrupo('Por forma de compra', d.porFormaCompra, 'Forma de compra')}
+    ${tablaGrupo('Por propiedad', d.porPropiedad, 'Propiedad')}
+    ${tablaGrupo('Por portal de origen', d.porPortal, 'Portal')}
+    <section class="tarjeta">
+      <h2>Actividad de visitas</h2>
+      <table class="ficha">
+        <tr><th>Visitas agendadas</th><td>${a.visitasAgendadas}</td></tr>
+        <tr><th>Confirmaron asistencia</th><td>${a.confirmaronAsistencia}</td></tr>
+        <tr><th>Visitó y continúa</th><td>${a.realizadas}</td></tr>
+        <tr><th>No asistió</th><td>${a.noAsistio}</td></tr>
+        <tr><th>No continúa</th><td>${a.noContinua}${d.motivosNoContinua.length ? ` · ${esc(d.motivosNoContinua.map((m) => `${m.motivo}: ${m.cantidad}`).join(', '))}` : ''}</td></tr>
+        <tr><th>Canceladas</th><td>${a.canceladas}</td></tr>
+      </table>
+    </section>
+    <section class="tarjeta">
+      <h2>Hoy</h2>
+      <table class="ficha">
+        <tr><th>Postulaciones por revisar</th><td><a href="/admin/ventas?estado=documentos_recibidos#interesados-venta">${d.pendientes.porRevisar}</a></td></tr>
+        <tr><th>Esperando agenda</th><td><a href="/admin/ventas?estado=aprobado#interesados-venta">${d.pendientes.esperandoAgenda}</a></td></tr>
+        <tr><th>En negociación</th><td><a href="/admin/ventas?estado=negociacion#interesados-venta">${d.pendientes.enNegociacion}</a></td></tr>
+        <tr><th>Visitas sin resultado</th><td>${d.pendientes.sinResultado}</td></tr>
+        <tr><th>Propiedades</th><td><a href="/admin/ventas/propiedades">${d.propiedades.disponibles} disponibles · ${d.propiedades.reservadas} reservadas · ${d.propiedades.vendidas} vendidas</a></td></tr>
+      </table>
+    </section>`,
+    opcCapital(config, 'indicadores')
+  );
+}
+
+module.exports = { indicadoresVenta, calcularIndicadoresVenta, formularioCompra, panelVentas, propiedadesVenta, seccionesCompraFicha, calificacionDe, ESTADOS_PROPIEDAD, EN_NEGOCIACION };

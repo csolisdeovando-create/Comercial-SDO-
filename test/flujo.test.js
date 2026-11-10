@@ -1695,3 +1695,42 @@ test('SDO Capital · Ventas: el pie mínimo depende de la propiedad (desde 10%) 
   assert.strictEqual(calificacionDe({ ...comprador, pie_uf: 240 }, economico, ctx.config, 40000).reglas[0].cumple, true);
   assert.strictEqual(calificacionDe(comprador, general, ctx.config, 40000).reglas[0].cumple, false);
 });
+
+test('SDO Rent y SDO Capital separados: selector arriba, menú e indicadores propios, calendario y visita a mano con su marca', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const get = async (ruta, cookie = '') => fetch(ctx.url + ruta, { headers: { ...h, ...(cookie ? { cookie } : {}) } });
+
+  const rent = await (await get('/admin')).text();
+  assert.match(rent, /class="rent activo">🏠 SDO Rent · Arriendos/);
+  assert.match(rent, /href="\/admin\/ventas" class="capital ">🏢 SDO Capital · Ventas/);
+  assert.doesNotMatch(rent, /Propiedades<\/a>/);
+
+  const r = await get('/admin/ventas');
+  const cookie = r.headers.get('set-cookie').split(';')[0];
+  assert.strictEqual(cookie, 'vista_negocio=venta');
+  const capital = await r.text();
+  assert.match(capital, /class="capital activo"/);
+  assert.match(capital, /logo-sdocapital\.png/);
+  for (const m of ['Interesados', 'Propiedades', 'Calendario de visitas', 'Indicadores']) assert.match(capital, new RegExp(`>${m}</a>`));
+
+  // Indicadores de venta propios
+  const lead = ctx.db.crearLead({ telefono: '56900001111', negocio: 'venta', para_que: 'vivir', tipo: 'contado', documentos_at: '2026-10-10T12:00:00Z', aprobado_at: '2026-10-11T12:00:00Z', reserva_fecha: '2026-10-14', estado: 'reservado' });
+  const ind = await (await get('/admin/ventas/indicadores?periodo=30', cookie)).text();
+  assert.match(ind, /Embudo de compra/);
+  assert.match(ind, /Reservaron<\/span>[\s\S]*?<strong>1<\/strong>/);
+  assert.match(ind, /Para vivir/);
+  // Los indicadores de arriendo no lo cuentan
+  assert.match(await (await get('/admin/indicadores?periodo=30')).text(), /Postularon<\/span>[\s\S]*?<strong>0<\/strong>/);
+
+  // El calendario (compartido) se abre con la marca de donde vienes
+  assert.match(await (await get('/admin/calendario', cookie)).text(), /logo-sdocapital\.png/);
+  assert.doesNotMatch(await (await get('/admin/calendario?negocio=arriendo', cookie)).text(), /logo-sdocapital\.png/);
+
+  // Visita a mano desde SDO Capital: queda como interesado de venta
+  const fd = new URLSearchParams({ nombre: 'Comprador Manual', telefono: '+56 9 3333 2222', fecha: '2026-10-16', hora: '10', origen: 'Llamada telefónica', avisar: '' });
+  await fetch(`${ctx.url}/admin/visita/nueva`, { method: 'POST', headers: { ...h, cookie }, body: fd, redirect: 'manual' });
+  assert.strictEqual(ctx.db.leadPorTelefono('56933332222').negocio, 'venta');
+  assert.ok(lead);
+});

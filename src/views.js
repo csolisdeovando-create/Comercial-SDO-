@@ -11,15 +11,29 @@ const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSema
 
 function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true, marca = null } = {}) {
   const capital = marca === 'capital';
-  const menu = nav
-    ? `<nav class="menu">${[
-        ['leads', '/admin', 'Interesados'],
-        ['calendario', '/admin/calendario', 'Calendario de visitas'],
-        ['indicadores', '/admin/indicadores', 'Indicadores'],
-        ['ventas', '/admin/ventas', '🏢 SDO Capital · Ventas'],
+  // Cada negocio tiene su propio menú; el selector de arriba cambia entre SDO Rent (arriendos) y SDO Capital (ventas)
+  const opciones = capital
+    ? [
+        ['leads', '/admin/ventas', 'Interesados'],
+        ['propiedades', '/admin/ventas/propiedades', 'Propiedades'],
+        ['calendario', '/admin/calendario?negocio=venta', 'Calendario de visitas'],
+        ['indicadores', '/admin/ventas/indicadores', 'Indicadores'],
       ]
+    : [
+        ['leads', '/admin', 'Interesados'],
+        ['calendario', '/admin/calendario?negocio=arriendo', 'Calendario de visitas'],
+        ['indicadores', '/admin/indicadores', 'Indicadores'],
+      ];
+  const menu = nav
+    ? `<nav class="menu">${opciones
         .map(([k, href, txt]) => `<a href="${href}" class="${nav === k ? 'activo' : ''}">${txt}</a>`)
         .join('')}<a href="/salir" class="salir">Salir</a></nav>`
+    : '';
+  const selector = nav
+    ? `<div class="selector-negocio"><div class="contenedor ${ancho}">
+    <a href="/admin" class="rent ${capital ? '' : 'activo'}">🏠 SDO Rent · Arriendos</a>
+    <a href="/admin/ventas" class="capital ${capital ? 'activo' : ''}">🏢 SDO Capital · Ventas</a>
+  </div></div>`
     : '';
   return `<!doctype html>
 <html lang="es">
@@ -35,21 +49,22 @@ function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = ''
 <meta name="apple-mobile-web-app-title" content="SDO Comercial">
 <link rel="stylesheet" href="/static/styles.css?v=${VERSION}">
 </head>
-<body>
+<body class="${capital ? 'marca-capital' : 'marca-rent'}">
+${selector}
 <header class="barra"><div class="contenedor ${ancho}">
   <a class="logo" href="${nav ? (capital ? '/admin/ventas' : '/admin') : '#'}">${
     capital
       ? `<img src="/static/logo-sdocapital.png?v=${VERSION}" alt="SDO Capital" width="90" height="48">`
       : `<img src="/static/logo.png?v=${VERSION}" alt="${esc(empresa)}" width="94" height="48">`
   }</a>
-  <span class="sub">${nav ? (capital ? 'Ventas' : 'Panel comercial') : capital ? 'Venta de departamentos' : 'Área Comercial'}</span>
+  <span class="sub">${nav ? (capital ? 'Panel de ventas' : 'Panel de arriendos') : capital ? 'Venta de departamentos' : 'Área Comercial'}</span>
   ${menu}
 </div></header>
 <main class="contenedor ${ancho}">
 ${cuerpo}
 </main>
 ${pie ? `<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación${capital ? ' de compra' : ' de arriendo'}.</footer>` : ''}
-${nav ? '<footer class="pie contenedor">SDO Comercial · Desarrollado por José Cano · Todos los derechos reservados</footer>' : ''}
+${nav ? `<footer class="pie contenedor">${capital ? 'SDO Capital · Ventas' : 'SDO Rent · Arriendos'} · SDO Comercial · Desarrollado por José Cano · Todos los derechos reservados</footer>` : ''}
 ${scripts.map((sc) => `<script src="${sc}?v=${VERSION}" defer></script>`).join('\n')}
 ${nav || titulo === 'Ingresar al panel' ? `<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {});</script>` : ''}
 </body>
@@ -618,7 +633,7 @@ function fichaAdmin({ lead, documentos, visita, revisionDocs = null, disponibles
         <a class="boton peligro" href="/admin/lead/${lead.id}/eliminar">🗑️ Eliminar interesado</a>
       </div>
     </section>`,
-    venta ? { ...opcPanel(config, 'ventas'), marca: 'capital' } : opcPanel(config, 'leads')
+    venta ? { ...opcPanel(config, 'leads'), empresa: config.venta.empresa, marca: 'capital' } : opcPanel(config, 'leads')
   );
 }
 
@@ -1004,7 +1019,7 @@ function confirmarEliminar({ lead, documentos, visita, config }) {
   );
 }
 
-function nuevaVisita({ valores: v, errores, conflicto, cruces = [], existente, origenes, horas, hoy, config }) {
+function nuevaVisita({ valores: v, errores, conflicto, cruces = [], existente, origenes, horas, hoy, config, marca = null }) {
   const val = (c) => esc(v[c] ?? '');
   const reintento = conflicto || existente;
   return layout(
@@ -1061,11 +1076,11 @@ function nuevaVisita({ valores: v, errores, conflicto, cruces = [], existente, o
         <button class="boton primario grande">${reintento ? 'Confirmar y agendar' : 'Agendar visita'}</button>
       </form>
     </section>`,
-    opcPanel(config, 'calendario')
+    { ...opcPanel(config, 'calendario'), ...(marca === 'capital' ? { marca, empresa: config.venta.empresa } : {}) }
   );
 }
 
-function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], proximas, nueva = null, config }) {
+function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], proximas, nueva = null, config, marca = null }) {
   const cols = columnasSemana(config.agenda);
   const dias = cols.map((d) => sumarDias(lunes, d - 1));
   // Horas del horario normal + las que se pueden abrir el sábado + las de visitas ingresadas a mano fuera de horario
@@ -1236,7 +1251,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
           : '<p class="nota">No hay visitas agendadas.</p>'
       }
     </section>`,
-    opcPanel(config, 'calendario')
+    { ...opcPanel(config, 'calendario'), ...(marca === 'capital' ? { marca, empresa: config.venta.empresa } : {}) }
   );
 }
 

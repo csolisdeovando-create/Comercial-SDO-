@@ -457,3 +457,14 @@ form.mover-papelera { margin: 6px 0 10px; }
 .editar-propiedad-venta summary { list-style: none; display: inline-block; }
 .editar-propiedad-venta[open] { min-width: min(560px, 80vw); }
 .editar-propiedad-venta form { margin-top: 8px; }
+
+/* Selector de negocio: SDO Rent (arriendos) / SDO Capital (ventas) */
+.selector-negocio { background: #111417; }
+.selector-negocio .contenedor { display: flex; gap: 4px; padding-top: 6px; padding-bottom: 0; }
+.selector-negocio a { color: #c9d1d9; text-decoration: none; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px 8px 0 0; }
+.selector-negocio a:hover { color: #fff; }
+.selector-negocio a.activo { background: #fff; color: #111417; }
+.selector-negocio a.capital.activo { color: #2e4a8f; }
+.marca-capital .barra { border-bottom-color: #2e4a8f; }
+.marca-capital .menu a.activo { background: #2e4a8f; color: #fff; }
+@media (max-width: 600px) { .selector-negocio .contenedor { padding-left: 8px; padding-right: 8px; } .selector-negocio a { flex: 1; text-align: center; padding: 8px 6px; font-size: 12px; } }

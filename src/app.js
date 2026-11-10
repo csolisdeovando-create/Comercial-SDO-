@@ -1108,7 +1108,12 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
 
   const sinTildes = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
+  // El panel recuerda si estás en SDO Rent (arriendos) o SDO Capital (ventas): el calendario compartido y la visita a mano usan esa marca
+  const negocioVista = (req) => (/(?:^|;\s*)vista_negocio=venta/.test(req.get('cookie') || '') ? 'venta' : 'arriendo');
+  const recordarNegocio = (res, negocio) => res.cookie('vista_negocio', negocio, { path: '/admin', httpOnly: true, sameSite: 'lax', maxAge: 180 * 864e5 });
+
   app.get('/admin', (req, res) => {
+    recordarNegocio(res, 'arriendo');
     const eliminado = req.query.eliminado ? String(req.query.eliminado).slice(0, 150) : null;
     const filtros = { q: String(req.query.q || '').trim().slice(0, 100), estado: String(req.query.estado || '') };
     const todosConPapelera = db.listarLeads(5000).filter((l) => l.negocio !== 'venta'); // ventas tiene su pestaña
@@ -1132,7 +1137,10 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       .visitasSinResultado(hoy, sumarDias(hoy, -30))
       .filter((v) => v.fecha < hoy || v.hora * 60 + config.agenda.duracionMinutos <= minutos);
     const recordados = req.query.recordados !== undefined ? Number(req.query.recordados) || 0 : null;
-    res.send(vistas.panel({ leads: leads.slice(0, 300), todos, visitas: db.listarVisitas(hoy), sinResultado, recordados, hoy, filtros, eliminado, enPapelera: papelera.length, config }));
+    const deArriendo = (v) => v.negocio !== 'venta';
+    res.send(
+      vistas.panel({ leads: leads.slice(0, 300), todos, visitas: db.listarVisitas(hoy).filter(deArriendo), sinResultado: sinResultado.filter(deArriendo), recordados, hoy, filtros, eliminado, enPapelera: papelera.length, config })
+    );
   });
 
   // Planilla para Excel (separador ";" y BOM para que Excel en español abra bien los acentos)
@@ -1204,6 +1212,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   const indicadores = (p) => calcularIndicadores({ leads: leadsArriendo(), visitas: visitasArriendo(), desde: p.desde, hasta: p.hasta, hoy: hoyChile() });
 
   app.get('/admin/indicadores', (req, res) => {
+    recordarNegocio(res, 'arriendo');
     const p = periodoIndicadores(req.query);
     res.send(vistas.indicadores({ datos: indicadores(p), periodo: p, config }));
   });
@@ -1221,6 +1230,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   });
 
   app.get('/admin/calendario', (req, res) => {
+    const negocio = ['venta', 'arriendo'].includes(req.query.negocio) ? req.query.negocio : negocioVista(req);
+    recordarNegocio(res, negocio);
     const desplazamiento = Math.max(-52, Math.min(52, parseInt(req.query.semana, 10) || 0));
     const hoy = hoyChile();
     const lunes = sumarDias(lunesDe(hoy), desplazamiento * 7);
@@ -1236,6 +1247,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         proximas: db.listarVisitas(hoy),
         nueva,
         config: configVista,
+        marca: negocio === 'venta' ? 'capital' : null,
       })
     );
   });
@@ -1246,7 +1258,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
 
   const formNuevaVisita = (res, valores, { errores = [], conflicto = null, cruces = [], existente = null, status = 200 } = {}) =>
     res.status(status).send(
-      vistas.nuevaVisita({ valores, errores, conflicto, cruces, existente, origenes: ORIGENES_MANUALES, horas: HORAS_MANUALES, hoy: hoyChile(), config })
+      vistas.nuevaVisita({ valores, errores, conflicto, cruces, existente, origenes: ORIGENES_MANUALES, horas: HORAS_MANUALES, hoy: hoyChile(), config, marca: negocioVista(res.req) === 'venta' ? 'capital' : null })
     );
 
   app.get('/admin/visita/nueva', (req, res) => {
@@ -1296,7 +1308,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     const propiedad = txt('propiedad', 300);
     const r = db.transaccion(() => {
       if (!lead) {
-        lead = db.crearLead({ telefono, nombre, email: email || null, propiedad: propiedad || null, portal: origen, comentarios: nota || null });
+        lead = db.crearLead({ telefono, nombre, email: email || null, propiedad: propiedad || null, portal: origen, comentarios: nota || null, negocio: negocioVista(req) }); // en SDO Capital queda como interesado de venta
       } else {
         lead = db.actualizarLead(lead.id, {
           nombre: lead.nombre || nombre,
@@ -1357,6 +1369,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   // SDO Capital · Ventas: panel, propiedades y negociación
   // ------------------------------------------------------------------
   app.get('/admin/ventas', (req, res) => {
+    recordarNegocio(res, 'venta');
     const filtros = { q: String(req.query.q || '').trim().slice(0, 100), estado: String(req.query.estado || '') };
     const ventas = db.listarLeads(5000).filter((l) => l.negocio === 'venta');
     const papelera = ventas.filter((l) => l.papelera_at);
@@ -1382,13 +1395,31 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         desde: sumarDias(hoyChile(), -90),
         valorUf: valorUf.actual(),
         recordados,
+        proximas: db.listarVisitas(hoyChile()).filter((v) => v.negocio === 'venta'),
         config,
       })
     );
   });
 
   const AVISOS_PROPIEDAD = { agregada: 'Propiedad agregada.', guardada: 'Cambios guardados.', eliminada: 'Propiedad eliminada.' };
+  app.get('/admin/ventas/indicadores', (req, res) => {
+    recordarNegocio(res, 'venta');
+    const p = periodoIndicadores(req.query);
+    const ventas = db.todosLosLeads().filter((l) => l.negocio === 'venta');
+    const ids = new Set(ventas.map((l) => l.id));
+    const datos = vistasVentas.calcularIndicadoresVenta({
+      leads: ventas,
+      visitas: db.todasLasVisitas().filter((v) => ids.has(v.lead_id)),
+      propiedades: db.listarPropiedadesVenta(),
+      desde: p.desde,
+      hasta: p.hasta,
+      hoy: hoyChile(),
+    });
+    res.send(vistasVentas.indicadoresVenta({ datos, periodo: p, config }));
+  });
+
   app.get('/admin/ventas/propiedades', (req, res) => {
+    recordarNegocio(res, 'venta');
     res.send(vistasVentas.propiedadesVenta({ propiedades: db.listarPropiedadesVenta(), aviso: AVISOS_PROPIEDAD[req.query.ok] || null, config }));
   });
   const datosPropiedad = (b) => {
@@ -1589,7 +1620,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   app.post('/admin/visita/:id/breal', formAdmin, (req, res) => {
     const visita = db.visitaPorId(Number(req.params.id));
     if (visita) db.marcarBreal(visita.id, req.body?.registrada === '1');
-    res.redirect(303, `/admin${req.body?.volver === 'calendario' ? '/calendario' : ''}#proximas`);
+    res.redirect(303, `${req.body?.volver === 'calendario' ? '/admin/calendario' : negocioVista(req) === 'venta' ? '/admin/ventas' : '/admin'}#proximas`);
   });
 
   app.post('/admin/lead/:id/pedir-datos', formAdmin, async (req, res) => {

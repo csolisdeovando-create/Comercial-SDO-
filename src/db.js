@@ -330,7 +330,7 @@ function crearRepositorio(db) {
     listarVisitas: (desde) =>
       db
         .prepare(
-          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.tipo, l.portal FROM visitas v
+          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.tipo, l.portal, l.negocio FROM visitas v
            JOIN leads l ON l.id = v.lead_id WHERE v.estado = 'confirmada' AND v.fecha >= ?
            ORDER BY v.fecha, v.hora`
         )
@@ -370,7 +370,7 @@ function crearRepositorio(db) {
     visitasSinResultado: (hastaFecha, desdeFecha = '0000-00-00') =>
       db
         .prepare(
-          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.portal FROM visitas v JOIN leads l ON l.id = v.lead_id
+          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.portal, l.negocio FROM visitas v JOIN leads l ON l.id = v.lead_id
            WHERE v.estado = 'confirmada' AND v.resultado IS NULL AND v.fecha BETWEEN ? AND ? ORDER BY v.fecha DESC, v.hora DESC`
         )
         .all(desdeFecha, hastaFecha),

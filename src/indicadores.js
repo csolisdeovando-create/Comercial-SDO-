@@ -177,3 +177,113 @@ function seguimientoAnonimo({ leads, visitas, desde, hasta }) {
 }
 
 module.exports = { calcularIndicadores, detalleInteresados, seguimientoAnonimo, claveRut };
+
+// ---------- SDO Capital · Ventas ----------
+const ETAPAS_VENTA = ['oferta', 'reservado', 'promesa', 'escriturado'];
+
+// Embudo, actividad y tiempos de las compras. Cada interesado cuenta en todas las etapas hasta la más avanzada que alcanzó.
+function calcularIndicadoresVenta({ leads, visitas, propiedades = [], desde, hasta, hoy }) {
+  const visitasDe = new Map();
+  for (const v of visitas) {
+    if (v.estado === 'reagendada') continue;
+    if (!visitasDe.has(v.lead_id)) visitasDe.set(v.lead_id, []);
+    visitasDe.get(v.lead_id).push(v);
+  }
+  const de = (l) => visitasDe.get(l.id) || [];
+  const llego = (l, etapa) => ETAPAS_VENTA.indexOf(l.estado) >= ETAPAS_VENTA.indexOf(etapa);
+  const pasos = [
+    ['Postularon', () => true],
+    ['Aprobados', (l) => l.aprobado_at],
+    ['Agendaron visita', (l) => de(l).length],
+    ['Visitaron', (l) => de(l).some((v) => v.resultado === 'realizada' || v.resultado === 'no_continua')],
+    ['Ofertaron', (l) => l.oferta_fecha || llego(l, 'oferta')],
+    ['Reservaron', (l) => l.reserva_fecha || llego(l, 'reservado')],
+    ['Promesa', (l) => l.promesa_fecha || llego(l, 'promesa')],
+    ['Escritura', (l) => l.escritura_fecha || l.estado === 'escriturado'],
+  ];
+  const nivel = (l) => pasos.reduce((n, [, f], i) => (f(l) ? i : n), 0);
+  const cohorte = leads.filter((l) => enPeriodo(l.documentos_at, desde, hasta));
+  const embudo = pasos.map(([etapa], i) => {
+    const llegaron = cohorte.filter((l) => nivel(l) >= i);
+    return { etapa, cantidad: llegaron.length, vivir: llegaron.filter((l) => l.para_que === 'vivir').length, invertir: llegaron.filter((l) => l.para_que === 'invertir').length };
+  });
+  embudo.forEach((e, i) => {
+    e.desdeAnterior = i ? pct(e.cantidad, embudo[i - 1].cantidad) : null;
+    e.desdeInicio = pct(e.cantidad, embudo[0].cantidad);
+  });
+  const agrupar = (clave) => {
+    const m = new Map();
+    for (const l of cohorte) {
+      const k = clave(l) || 'Sin dato';
+      if (!m.has(k)) m.set(k, { grupo: k, postularon: 0, aprobados: 0, visitaron: 0, reservaron: 0, escrituraron: 0 });
+      const f = m.get(k);
+      f.postularon++;
+      if (nivel(l) >= 1) f.aprobados++;
+      if (nivel(l) >= 3) f.visitaron++;
+      if (nivel(l) >= 5) f.reservaron++;
+      if (nivel(l) >= 7) f.escrituraron++;
+    }
+    return [...m.values()].sort((a, b) => b.postularon - a.postularon);
+  };
+  const propiedad = (l) => {
+    const p = propiedades.find((x) => x.id === l.propiedad_venta_id);
+    return p ? [p.direccion, p.comuna].filter(Boolean).join(', ') : l.propiedad;
+  };
+
+  // Lo que pasó en el período (por fecha de cada hecho)
+  const delPeriodo = visitas.filter((v) => v.estado !== 'reagendada' && v.fecha >= desde && v.fecha <= hasta && leads.some((l) => l.id === v.lead_id));
+  const activas = delPeriodo.filter((v) => v.estado === 'confirmada');
+  const fechaEn = (campo) => leads.filter((l) => enPeriodo(l[campo], desde, hasta)).length;
+  const actividad = {
+    postulaciones: cohorte.length,
+    visitasAgendadas: activas.length,
+    confirmaronAsistencia: activas.filter((v) => v.confirmada_at).length,
+    realizadas: activas.filter((v) => v.resultado === 'realizada').length,
+    noAsistio: activas.filter((v) => v.resultado === 'no_asistio').length,
+    noContinua: activas.filter((v) => v.resultado === 'no_continua').length,
+    canceladas: delPeriodo.filter((v) => v.estado === 'cancelada').length,
+    ofertas: fechaEn('oferta_fecha'),
+    reservas: fechaEn('reserva_fecha'),
+    promesas: fechaEn('promesa_fecha'),
+    escrituras: fechaEn('escritura_fecha'),
+    ufOfertadas: leads.filter((l) => enPeriodo(l.oferta_fecha, desde, hasta)).reduce((s, l) => s + (Number(l.oferta_uf) || 0), 0),
+  };
+  const noContinua = new Map();
+  for (const v of activas.filter((x) => x.resultado === 'no_continua')) noContinua.set(v.motivo_resultado || 'Sin motivo', (noContinua.get(v.motivo_resultado || 'Sin motivo') || 0) + 1);
+
+  // Tiempos (medianas, en días) de las postulaciones del período
+  const dias = (a, b) => (ms(b) - ms(a)) / 864e5;
+  const primeraVisita = (l) => de(l).map((v) => v.fecha).sort().at(0);
+  const med = (xs) => redondear(mediana(xs.filter((x) => x >= 0)));
+  const tiempos = {
+    postulacionAAprobacion: med(cohorte.filter((l) => l.aprobado_at).map((l) => dias(l.documentos_at, l.aprobado_at))),
+    aprobacionAVisita: med(cohorte.filter((l) => l.aprobado_at && primeraVisita(l)).map((l) => dias(l.aprobado_at, `${primeraVisita(l)}T12:00:00Z`))),
+    visitaAReserva: med(cohorte.filter((l) => l.reserva_fecha && primeraVisita(l)).map((l) => dias(`${primeraVisita(l)}T12:00:00Z`, `${l.reserva_fecha}T12:00:00Z`))),
+    reservaAEscritura: med(cohorte.filter((l) => l.reserva_fecha && l.escritura_fecha).map((l) => dias(`${l.reserva_fecha}T12:00:00Z`, `${l.escritura_fecha}T12:00:00Z`))),
+  };
+
+  return {
+    periodo: { desde, hasta },
+    embudo,
+    porProposito: agrupar((l) => ({ vivir: 'Para vivir', invertir: 'Para invertir' })[l.para_que]),
+    porFormaCompra: agrupar((l) => ({ credito: 'Crédito hipotecario', contado: 'Contado', subsidio: 'Subsidio', empresa: 'Empresa' })[l.tipo]),
+    porPortal: agrupar((l) => l.portal),
+    porPropiedad: agrupar(propiedad),
+    actividad,
+    motivosNoContinua: [...noContinua.entries()].map(([motivo, cantidad]) => ({ motivo, cantidad })).sort((a, b) => b.cantidad - a.cantidad),
+    tiempos,
+    pendientes: {
+      porRevisar: leads.filter((l) => l.estado === 'documentos_recibidos' && !l.papelera_at).length,
+      esperandoAgenda: leads.filter((l) => l.estado === 'aprobado' && !l.papelera_at).length,
+      enNegociacion: leads.filter((l) => ['oferta', 'reservado', 'promesa'].includes(l.estado)).length,
+      sinResultado: visitas.filter((v) => v.estado === 'confirmada' && v.fecha < hoy && !v.resultado && leads.some((l) => l.id === v.lead_id)).length,
+    },
+    propiedades: {
+      disponibles: propiedades.filter((p) => p.estado === 'disponible').length,
+      reservadas: propiedades.filter((p) => p.estado === 'reservada').length,
+      vendidas: propiedades.filter((p) => p.estado === 'vendida').length,
+    },
+  };
+}
+
+module.exports.calcularIndicadoresVenta = calcularIndicadoresVenta;
