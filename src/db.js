@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS propiedades_venta (
   m2 REAL,
   url_aviso TEXT,
   estado TEXT NOT NULL DEFAULT 'disponible', -- disponible | reservada | vendida | pausada
+  pie_minimo REAL, -- fracción del precio (0.1 = 10%); vacío = según el tramo de precio
   notas TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -143,6 +144,7 @@ function migrar(db) {
   if (!leads.includes('avisos_agenda')) db.exec('ALTER TABLE leads ADD COLUMN avisos_agenda INTEGER DEFAULT 0');
   if (!leads.includes('datos_pedidos_at')) db.exec('ALTER TABLE leads ADD COLUMN datos_pedidos_at TEXT');
   if (!leads.includes('rechazado_at')) db.exec('ALTER TABLE leads ADD COLUMN rechazado_at TEXT');
+  if (!columnas('propiedades_venta').includes('pie_minimo')) db.exec('ALTER TABLE propiedades_venta ADD COLUMN pie_minimo REAL');
   // SDO Capital · Ventas: tipo de negocio, datos de compra y negociación (oferta → reserva → promesa → escritura)
   for (const col of [
     "negocio TEXT DEFAULT 'arriendo'", 'para_que TEXT', 'pie_uf REAL', 'renta_liquida INTEGER', 'banco_preaprobacion TEXT', 'monto_preaprobado_uf REAL',
@@ -379,7 +381,7 @@ function crearRepositorio(db) {
     listarPropiedadesVenta: () => db.prepare(`SELECT * FROM propiedades_venta ORDER BY CASE estado WHEN 'disponible' THEN 0 WHEN 'reservada' THEN 1 WHEN 'pausada' THEN 2 ELSE 3 END, direccion`).all(),
     propiedadVenta: (id) => db.prepare('SELECT * FROM propiedades_venta WHERE id = ?').get(Number(id)),
     guardarPropiedadVenta(datos, id = null) {
-      const campos = ['direccion', 'comuna', 'precio_uf', 'dormitorios', 'banos', 'm2', 'url_aviso', 'estado', 'notas'].filter((c) => c in datos);
+      const campos = ['direccion', 'comuna', 'precio_uf', 'dormitorios', 'banos', 'm2', 'url_aviso', 'estado', 'notas', 'pie_minimo'].filter((c) => c in datos);
       if (id) {
         db.prepare(`UPDATE propiedades_venta SET ${campos.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`).run(...campos.map((c) => datos[c] ?? null), id);
         return repo.propiedadVenta(id);

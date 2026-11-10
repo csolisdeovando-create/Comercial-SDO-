@@ -1403,6 +1403,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       url_aviso: /^https?:\/\//.test(String(b.url_aviso || '').trim()) ? String(b.url_aviso).trim().slice(0, 500) : null,
       estado: vistasVentas.ESTADOS_PROPIEDAD[b.estado] ? b.estado : 'disponible',
       notas: String(b.notas || '').trim().slice(0, 300) || null,
+      pie_minimo: numero(b.pie_minimo) > 0 && numero(b.pie_minimo) <= 100 ? numero(b.pie_minimo) / 100 : null,
     };
   };
   app.post('/admin/ventas/propiedades', formAdmin, (req, res) => {

@@ -9,6 +9,15 @@ function dividendoUf(montoUf, tasaAnual, plazoAnios) {
   return r ? (montoUf * r) / (1 - (1 + r) ** -n) : montoUf / n;
 }
 
+// Pie mínimo de una propiedad: el que tiene anotado; si no, el del tramo de su precio; si no, el general (20%)
+function pieMinimoDe(propiedad, cfg) {
+  const propio = Number(propiedad?.pie_minimo);
+  if (propio > 0 && propio <= 1) return propio;
+  const precio = Number(propiedad?.precio_uf);
+  const tramo = precio > 0 ? (cfg.pieTramos || []).find(([hasta]) => precio <= hasta) : null;
+  return tramo ? tramo[1] : cfg.pieMinimo;
+}
+
 const uf = (x) => `${Number(x).toLocaleString('es-CL', { maximumFractionDigits: 0 })} UF`;
 const pesos = (x) => `$${Math.round(x).toLocaleString('es-CL')}`;
 const num = (x) => (x === null || x === undefined || x === '' || !Number.isFinite(Number(x)) ? null : Number(x));
@@ -24,7 +33,7 @@ const num = (x) => (x === null || x === undefined || x === '' || !Number.isFinit
  * @param {number} p.valorUf valor de la UF en pesos
  * @returns {{reglas: {clave, nombre, cumple: boolean|null, detalle}[], cumple: boolean|null, dividendoUf: number|null}}
  */
-function calificarCompra({ forma, precioUf, pieUf, preaprobadoUf, rentaLiquida, cfg, valorUf }) {
+function calificarCompra({ forma, precioUf, pieUf, preaprobadoUf, rentaLiquida, cfg, valorUf, pieMinimo = cfg.pieMinimo }) {
   const precio = num(precioUf);
   const pie = num(pieUf);
   const prestamo = num(preaprobadoUf);
@@ -33,10 +42,10 @@ function calificarCompra({ forma, precioUf, pieUf, preaprobadoUf, rentaLiquida, 
   const reglas = [];
 
   // 1) Pie: al menos el % mínimo del precio (al contado debe cubrir el precio completo)
-  const piePedido = precio ? precio * (forma === 'contado' ? 1 : cfg.pieMinimo) : null;
+  const piePedido = precio ? precio * (forma === 'contado' ? 1 : pieMinimo) : null;
   reglas.push({
     clave: 'pie',
-    nombre: forma === 'contado' ? 'Fondos para el precio completo' : `Pie de al menos ${Math.round(cfg.pieMinimo * 100)}%`,
+    nombre: forma === 'contado' ? 'Fondos para el precio completo' : `Pie de al menos ${Math.round(pieMinimo * 100)}%`,
     cumple: precio === null || pie === null ? null : pie >= piePedido,
     detalle:
       precio === null
@@ -110,4 +119,4 @@ function crearValorUf({ respaldo, fetchFn = fetch }) {
   };
 }
 
-module.exports = { calificarCompra, dividendoUf, crearValorUf };
+module.exports = { calificarCompra, dividendoUf, crearValorUf, pieMinimoDe };

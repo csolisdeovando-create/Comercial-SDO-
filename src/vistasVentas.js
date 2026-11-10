@@ -2,7 +2,7 @@
 const { esc, formatearRut } = require('./utils');
 const { REQUISITOS_VENTA, FORMAS_COMPRA, requisitosDe } = require('./requisitos');
 const { formularioPersona } = require('./personas');
-const { calificarCompra } = require('./calificacion');
+const { calificarCompra, pieMinimoDe } = require('./calificacion');
 const { PARA_QUE, PLAZOS_COMPRA } = require('./notificaciones');
 const vistas = require('./views');
 
@@ -26,6 +26,7 @@ function calificacionDe(lead, propiedad, config, valorUf) {
     rentaLiquida: lead.renta_liquida,
     cfg: config.venta,
     valorUf,
+    pieMinimo: pieMinimoDe(propiedad, config.venta),
   });
 }
 
@@ -123,7 +124,7 @@ function formularioCompra({ lead, valores = {}, errores = [], propiedades = [], 
             <select id="propiedad_venta_id" name="propiedad_venta_id">
               <option value="">— Otro / no está en la lista —</option>
               ${disponibles
-                .map((p) => `<option value="${p.id}" ${String(v.propiedad_venta_id) === String(p.id) ? 'selected' : ''}>${esc(p.direccion)}${p.comuna ? `, ${esc(p.comuna)}` : ''}${p.precio_uf ? ` · ${uf(p.precio_uf)}` : ''}${p.dormitorios ? ` · ${p.dormitorios}D${p.banos ? `/${p.banos}B` : ''}` : ''}</option>`)
+                .map((p) => `<option value="${p.id}" ${String(v.propiedad_venta_id) === String(p.id) ? 'selected' : ''}>${esc(p.direccion)}${p.comuna ? `, ${esc(p.comuna)}` : ''}${p.precio_uf ? ` · ${uf(p.precio_uf)}` : ''}${p.dormitorios ? ` · ${p.dormitorios}D${p.banos ? `/${p.banos}B` : ''}` : ''}${p.precio_uf ? ` · pie desde ${Math.round(pieMinimoDe(p, config.venta) * 100)}%` : ''}</option>`)
                 .join('')}
             </select></label>
           <p class="nota">Si no está en la lista, pega el link del aviso y escribe la dirección:</p>`
@@ -263,6 +264,7 @@ function propiedadesVenta({ propiedades, aviso, config }) {
       <label>Baños<input name="banos" type="number" min="0" value="${esc(p.banos ?? '')}"></label>
       <label>m²<input name="m2" type="number" step="any" min="0" value="${esc(p.m2 ?? '')}"></label>
       <label class="ancho">Link del aviso<input name="url_aviso" type="url" value="${esc(p.url_aviso || '')}" placeholder="https://…"></label>
+      <label>Pie mínimo (%)<input name="pie_minimo" type="number" step="any" min="1" max="100" value="${p.pie_minimo ? esc(Math.round(p.pie_minimo * 1000) / 10) : ''}" placeholder="Vacío = ${Math.round(config.venta.pieMinimo * 100)}% o según el precio"></label>
       <label>Estado<select name="estado">${Object.entries(ESTADOS_PROPIEDAD).map(([k, t]) => `<option value="${k}" ${(p.estado || 'disponible') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
       <label class="ancho">Notas<input name="notas" value="${esc(p.notas || '')}"></label>`;
   return vistas.layout(
@@ -270,8 +272,8 @@ function propiedadesVenta({ propiedades, aviso, config }) {
     `<p class="migas"><a href="/admin/ventas">← SDO Capital · Ventas</a></p>
     ${aviso ? `<div class="alerta ok">${esc(aviso)}</div>` : ''}
     <section class="tarjeta">
-      <div class="titulo-seccion"><div><h1>🏢 Propiedades en venta</h1><span class="nota">Las disponibles aparecen en el formulario de compra para que el interesado elija.</span></div></div>
-      <div class="tabla-scroll"><table class="tabla tabla-movil"><thead><tr><th>Dirección</th><th>Precio</th><th>D/B</th><th>Estado</th><th></th></tr></thead><tbody>
+      <div class="titulo-seccion"><div><h1>🏢 Propiedades en venta</h1><span class="nota">Las disponibles aparecen en el formulario de compra para que el interesado elija. El pie mínimo de cada una se usa para calificar (puede ser desde 10%).</span></div></div>
+      <div class="tabla-scroll"><table class="tabla tabla-movil"><thead><tr><th>Dirección</th><th>Precio</th><th>Pie mínimo</th><th>D/B</th><th>Estado</th><th></th></tr></thead><tbody>
       ${
         propiedades.length
           ? propiedades
@@ -279,6 +281,7 @@ function propiedadesVenta({ propiedades, aviso, config }) {
                 (p) => `<tr>
           <td class="col-principal"><strong>${esc(p.direccion)}</strong>${p.comuna ? `<br><small>${esc(p.comuna)}</small>` : ''}${p.url_aviso ? `<br><a href="${esc(p.url_aviso)}" target="_blank" rel="noopener">Ver aviso ↗</a>` : ''}</td>
           <td>${uf(p.precio_uf)}</td>
+          <td>${Math.round(pieMinimoDe(p, config.venta) * 100)}%${p.pie_minimo ? '' : ' <small class="nota">(general)</small>'}${p.precio_uf ? `<br><small>${uf(p.precio_uf * pieMinimoDe(p, config.venta))}</small>` : ''}</td>
           <td>${p.dormitorios ?? '—'}D / ${p.banos ?? '—'}B${p.m2 ? ` · ${p.m2} m²` : ''}</td>
           <td><span class="estado prop-${esc(p.estado)}">${ESTADOS_PROPIEDAD[p.estado] || esc(p.estado)}</span></td>
           <td><details class="editar-propiedad-venta"><summary class="boton chico">Editar</summary>
@@ -288,7 +291,7 @@ function propiedadesVenta({ propiedades, aviso, config }) {
         </tr>`
               )
               .join('')
-          : '<tr><td colspan="5" class="nota">Aún no hay propiedades cargadas.</td></tr>'
+          : '<tr><td colspan="6" class="nota">Aún no hay propiedades cargadas.</td></tr>'
       }
       </tbody></table></div>
     </section>

@@ -1673,3 +1673,25 @@ test('SDO Capital · Ventas: completar datos no pide fecha de cambio ni la propi
   const l = ctx.db.leadPorId(lead.id);
   assert.deepStrictEqual([l.nombre, l.propiedad, l.plazo_cambio], ['Ana Compra', 'Rosario Sur 91', null]);
 });
+
+test('SDO Capital · Ventas: el pie mínimo depende de la propiedad (desde 10%) o del tramo de precio', async (t) => {
+  const ctx = await preparar({ VENTA_PIE_TRAMOS: '2500:0.1' });
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const post = (ruta, datos) => fetch(ctx.url + ruta, { method: 'POST', headers: h, body: new URLSearchParams(datos), redirect: 'manual' });
+  await post('/admin/ventas/propiedades', { direccion: 'Depto con pie 10%', precio_uf: '3500', pie_minimo: '10', estado: 'disponible' });
+  await post('/admin/ventas/propiedades', { direccion: 'Depto económico', precio_uf: '2400', estado: 'disponible' });
+  await post('/admin/ventas/propiedades', { direccion: 'Depto general', precio_uf: '5000', estado: 'disponible' });
+  const [conPie, economico, general] = ['Depto con pie 10%', 'Depto económico', 'Depto general'].map((d) => ctx.db.listarPropiedadesVenta().find((p) => p.direccion === d));
+  assert.strictEqual(conPie.pie_minimo, 0.1);
+  const lista = await (await fetch(`${ctx.url}/admin/ventas/propiedades`, { headers: h })).text();
+  assert.match(lista, /Depto económico[\s\S]*?10% <small class="nota">\(general\)/);
+  assert.match(await (await fetch(`${ctx.url}/comprar`)).text(), /Depto con pie 10% · 3\.500 UF · pie desde 10%/);
+  // Con 10% de pie califica en la propiedad de 10%, pero no en la de 20%
+  const { calificacionDe } = require('../src/vistasVentas');
+  const comprador = { tipo: 'credito', pie_uf: 350, monto_preaprobado_uf: 4700, renta_liquida: 4000000 };
+  assert.strictEqual(calificacionDe(comprador, conPie, ctx.config, 40000).reglas[0].cumple, true);
+  assert.match(calificacionDe(comprador, conPie, ctx.config, 40000).reglas[0].nombre, /10%/);
+  assert.strictEqual(calificacionDe({ ...comprador, pie_uf: 240 }, economico, ctx.config, 40000).reglas[0].cumple, true);
+  assert.strictEqual(calificacionDe(comprador, general, ctx.config, 40000).reglas[0].cumple, false);
+});
