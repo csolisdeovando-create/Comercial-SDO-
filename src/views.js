@@ -1129,8 +1129,11 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
       : v.confirmada_at
         ? '<span class="res">✅ Confirmó</span>'
         : `<span class="res sin-confirmar">${sinConfirmar(v)}</span>`;
-    return `<div class="visita ${estadoVisita(v)}" title="${v.origen === 'equipo' ? `Ingresada a mano (${esc(v.portal || 'Manual')})` : esc(v.portal || '')}">
-      <a class="nombre" href="/admin/lead/${v.lead_id}">${v.negocio === 'venta' ? '<span class="tag-venta" title="SDO Capital · Venta">🏢 Venta</span> ' : ''}${esc(v.nombre || 'Interesado')}</a>
+    // Fondo y etiqueta con el color de cada marca (SDO Rent turquesa · SDO Capital azul); el borde izquierdo es el estado
+    const venta = v.negocio === 'venta';
+    return `<div class="visita ${estadoVisita(v)} ${venta ? 'neg-capital' : 'neg-rent'}" title="${venta ? 'SDO Capital · Venta' : 'SDO Rent · Arriendo'}${v.origen === 'equipo' ? ` · ingresada a mano (${esc(v.portal || 'Manual')})` : v.portal ? ` · ${esc(v.portal)}` : ''}">
+      <span class="marca-visita">${venta ? 'CAPITAL · venta' : 'RENT · arriendo'}</span>
+      <a class="nombre" href="/admin/lead/${v.lead_id}">${esc(v.nombre || 'Interesado')}</a>
       ${lugar}
       <a class="tel" href="tel:+${esc(v.telefono || '')}">📞 +${esc(v.telefono || '')}</a>
       ${estado}
@@ -1233,7 +1236,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
         <a class="boton" href="/admin/calendario?semana=${desplazamiento + 1}" aria-label="Semana siguiente">›</a>
         ${desplazamiento ? '<a class="boton chico" href="/admin/calendario">Hoy</a>' : ''}
       </div>
-      <p class="leyenda"><span class="ley pendiente">Por confirmar</span><span class="ley confirmada">Confirmó asistencia</span><span class="ley realizada">Con resultado</span><span>✍️ Ingresada a mano</span></p>
+      <p class="leyenda"><span class="ley-marca rent">RENT · arriendo</span><span class="ley-marca capital">CAPITAL · venta</span><span class="ley pendiente">Por confirmar</span><span class="ley confirmada">Confirmó asistencia</span><span class="ley realizada">Con resultado</span></p>
       <p class="nota">Toca <strong>＋</strong> en un horario libre para ingresar una visita agendada por otro medio, o <strong>🔒</strong> (o <strong>🔒 Día</strong>) cuando el equipo no pueda atender: deja de aparecer para los interesados.</p>
       ${tabla}
       ${lista}

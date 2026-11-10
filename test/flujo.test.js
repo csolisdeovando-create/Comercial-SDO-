@@ -936,7 +936,7 @@ test('visita ingresada a mano desde el panel (agendada por otro medio)', async (
   assert.ok(ctx.correos.some((c) => c.to === 'pedro@example.com'), 'confirmación al interesado');
   cal = await (await fetch(`${ctx.url}${r.headers.get('location')}`, { headers: h })).text();
   assert.match(cal, /Visita de <strong>Pedro Soto<\/strong> ingresada/);
-  assert.match(cal, /Ingresada a mano \(Llamada telefónica\)/);
+  assert.match(cal, /ingresada a mano \(Llamada telefónica\)/);
 
   // El horario queda ocupado para quienes agendan por el link
   const otro = ctx.db.crearLead({ telefono: '56933334444', nombre: 'Ana', email: 'ana@example.com', estado: 'aprobado' });
@@ -1637,7 +1637,7 @@ test('SDO Capital · Ventas: propiedad, postulación de compra con calificación
   await fetch(`${ctx.url}/revision/${lead.id}/aprobar?firma=${firma}`, { method: 'POST', redirect: 'manual' });
   await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|11' }) });
   const cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
-  assert.match(cal, /🏢 Venta<\/span> Marta Rojas Díaz/);
+  assert.match(cal, /neg-capital[\s\S]*?CAPITAL · venta<\/span>[\s\S]*?Marta Rojas Díaz/);
   // Un arriendo no puede tomar la misma hora
   const otro = ctx.db.crearLead({ telefono: '56911119999', nombre: 'Arrendatario', email: 'a@example.com', estado: 'aprobado' });
   r = await fetch(`${ctx.url}/agendar/${otro.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|11' }) });

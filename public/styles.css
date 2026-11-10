@@ -468,3 +468,13 @@ form.mover-papelera { margin: 6px 0 10px; }
 .marca-capital .barra { border-bottom-color: #2e4a8f; }
 .marca-capital .menu a.activo { background: #2e4a8f; color: #fff; }
 @media (max-width: 600px) { .selector-negocio .contenedor { padding-left: 8px; padding-right: 8px; } .selector-negocio a { flex: 1; text-align: center; padding: 8px 6px; font-size: 12px; } }
+
+/* Calendario: color de la marca en cada visita (SDO Rent turquesa · SDO Capital azul). El borde izquierdo sigue siendo el estado. */
+.visita.neg-rent { background: #e6f9fa; }
+.visita.neg-capital { background: #e9eef9; }
+.visita .marca-visita { display: inline-block !important; width: auto; font-size: 9.5px; font-weight: 800; letter-spacing: .04em; padding: 1px 6px; border-radius: 99px; margin-bottom: 2px; color: #fff !important; }
+.visita.neg-rent .marca-visita { background: #00a9b0; }
+.visita.neg-capital .marca-visita { background: #3a5aa8; }
+.leyenda .ley-marca { font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 99px; color: #fff; }
+.leyenda .ley-marca.rent { background: #00a9b0; }
+.leyenda .ley-marca.capital { background: #3a5aa8; }
