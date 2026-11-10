@@ -1562,3 +1562,114 @@ test('confirmar desde el calendario: pedir confirmación al interesado o confirm
   await post(`/admin/visita/${v.id}/confirmar`, {});
   assert.strictEqual(ctx.correos.length, antes);
 });
+
+test('SDO Capital · Ventas: propiedad, postulación de compra con calificación, visita en el mismo calendario y negociación', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const post = (ruta, datos) => fetch(ctx.url + ruta, { method: 'POST', headers: h, body: new URLSearchParams(datos), redirect: 'manual' });
+
+  // El equipo carga una propiedad en venta
+  assert.strictEqual((await post('/admin/ventas/propiedades', { direccion: 'Rosario Sur 91, depto 504', comuna: 'Las Condes', precio_uf: '3000', dormitorios: '2', banos: '2', url_aviso: 'https://www.yapo.cl/venta/91', estado: 'disponible' })).status, 303);
+  const prop = ctx.db.listarPropiedadesVenta()[0];
+  assert.strictEqual(prop.precio_uf, 3000);
+  const propiedades = await (await fetch(`${ctx.url}/admin/ventas/propiedades`, { headers: h })).text();
+  assert.match(propiedades, /Rosario Sur 91, depto 504/);
+  assert.match(propiedades, /logo-sdocapital\.png/);
+
+  // Llega por WhatsApp desde el aviso de venta: se crea como interesado de venta y recibe el link de compra
+  await postWebhook(ctx, mensajeWA('wamid.v1', '56955554444', 'Hola, me interesa este departamento https://www.yapo.cl/venta/91?utm=wa', 'Marta Rojas'));
+  let lead = ctx.db.leadPorTelefono('56955554444');
+  assert.strictEqual(lead.negocio, 'venta');
+  assert.strictEqual(lead.propiedad_venta_id, prop.id);
+  assert.match(ctx.wa.at(-1).texto, new RegExp(`/comprar/${lead.token}`));
+  // Un mensaje de arriendo sigue yendo a arriendos
+  await postWebhook(ctx, mensajeWA('wamid.a1', '56966667777', 'Hola, me interesa el arriendo https://www.yapo.cl/arriendo/55', 'Pedro Soto'));
+  assert.strictEqual(ctx.db.leadPorTelefono('56966667777').negocio, 'arriendo');
+
+  // El formulario de compra muestra la propiedad del listado y el logo de SDO Capital
+  const form = await (await fetch(`${ctx.url}/comprar/${lead.token}`)).text();
+  assert.match(form, /logo-sdocapital\.png/);
+  assert.match(form, /Rosario Sur 91, depto 504, Las Condes · 3\.000 UF/);
+  assert.match(form, /Para invertir/);
+  // /postular con su link lo lleva al formulario de compra
+  assert.strictEqual((await fetch(`${ctx.url}/postular/${lead.token}`, { redirect: 'manual' })).headers.get('location'), `/comprar/${lead.token}`);
+
+  // Faltan datos de compra: se piden
+  let r = await fetch(`${ctx.url}/comprar/${lead.token}`, { method: 'POST', body: formulario({ ...DATOS, tipo: 'credito', propiedad_venta_id: String(prop.id) }, [['cedula', 'c.pdf']]) });
+  assert.strictEqual(r.status, 422);
+  const err = await r.text();
+  assert.match(err, /para vivir o para invertir/);
+  assert.match(err, /cuánto tienes para el pie/);
+  assert.match(err, /banco y el monto de tu preaprobación/);
+  assert.match(err, /Falta adjuntar: Carta de preaprobación/);
+
+  // Postulación completa con crédito: pie 20%, preaprobación por el resto y dividendo bajo el 25%
+  const DOCS_CREDITO = [['cedula', 'c.pdf'], ['preaprobacion', 'banco.pdf'], ['liquidaciones', 'l1.pdf'], ['afp', 'afp.pdf'], ['pie', 'ahorro.pdf']];
+  r = await fetch(`${ctx.url}/comprar/${lead.token}`, {
+    method: 'POST',
+    body: formulario({ ...DATOS, nombre: 'Marta Rojas Díaz', telefono: '+56 9 5555 4444', tipo: 'credito', para_que: 'invertir', propiedad_venta_id: String(prop.id), pie_uf: '600', renta_liquida: '2.500.000', banco_preaprobacion: 'Banco Estado', monto_preaprobado_uf: '2400', plazo_compra: '1_3_meses', propiedad: '', url_publicacion: '' }, DOCS_CREDITO),
+  });
+  assert.strictEqual(r.status, 200);
+  assert.match(await r.text(), /Postulación enviada/);
+  lead = ctx.db.leadPorId(lead.id);
+  assert.deepStrictEqual([lead.estado, lead.tipo, lead.para_que, lead.pie_uf, lead.renta_liquida, lead.monto_preaprobado_uf], ['documentos_recibidos', 'credito', 'invertir', 600, 2500000, 2400]);
+  const aviso = ctx.correos.find((c) => /Nueva postulación de COMPRA/.test(c.subject));
+  assert.deepStrictEqual([...aviso.to].sort(), ['csolisdeovando@sdocapital.cl', 'julio.mendoza@sdorent.cl', 'sdopropiedades@sdorent.cl']);
+  assert.match(aviso.html, /logo-sdocapital\.png/);
+  assert.match(aviso.html, /Cumple las 3 condiciones/);
+  assert.match(aviso.html, /Para invertir/);
+  assert.match(ctx.correos.find((c) => c.to === 'juan@example.com' || /Recibimos tu postulación/.test(c.subject)).subject, /SDO Capital/);
+
+  // Panel de ventas: aparece con su calificación; el panel de arriendos no lo muestra
+  const panel = await (await fetch(`${ctx.url}/admin/ventas`, { headers: h })).text();
+  assert.match(panel, /Marta Rojas Díaz/);
+  assert.match(panel, /✅ Califica/);
+  assert.match(panel, /📈 Inversión/);
+  assert.doesNotMatch(await (await fetch(`${ctx.url}/admin`, { headers: h })).text(), /Marta Rojas Díaz/);
+  const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Carta de preaprobación del banco/);
+  assert.match(ficha, /Dividendo estimado/);
+  assert.match(ficha, /← SDO Capital · Ventas/);
+
+  // Se aprueba: agenda en el mismo calendario (Julio) y la tarjeta dice "Venta"
+  const firma = (await import('../src/utils.js')).firmar(ctx.config.secret, 'revision', lead.id);
+  await fetch(`${ctx.url}/revision/${lead.id}/aprobar?firma=${firma}`, { method: 'POST', redirect: 'manual' });
+  await fetch(`${ctx.url}/agendar/${lead.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|11' }) });
+  const cal = await (await fetch(`${ctx.url}/admin/calendario`, { headers: h })).text();
+  assert.match(cal, /🏢 Venta<\/span> Marta Rojas Díaz/);
+  // Un arriendo no puede tomar la misma hora
+  const otro = ctx.db.crearLead({ telefono: '56911119999', nombre: 'Arrendatario', email: 'a@example.com', estado: 'aprobado' });
+  r = await fetch(`${ctx.url}/agendar/${otro.token}`, { method: 'POST', body: new URLSearchParams({ bloque: '2026-10-16|11' }) });
+  assert.strictEqual(r.status, 409);
+
+  // Negociación: oferta → reserva (la propiedad queda reservada) → escritura (vendida)
+  const antes = ctx.correos.length;
+  await post(`/admin/lead/${lead.id}/negociacion`, { etapa: 'oferta', oferta_fecha: '2026-10-20', oferta_uf: '2900', avisar: '1' });
+  assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'oferta');
+  assert.match(ctx.correos.slice(antes).find((c) => /Oferta/.test(c.subject)).html, /2\.900 UF/);
+  await post(`/admin/lead/${lead.id}/negociacion`, { etapa: 'reserva', reserva_fecha: '2026-10-22', reserva_monto: '25 UF' });
+  assert.strictEqual(ctx.db.propiedadVenta(prop.id).estado, 'reservada');
+  await post(`/admin/lead/${lead.id}/negociacion`, { etapa: 'escritura', escritura_fecha: '2026-12-15' });
+  assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'escriturado');
+  assert.strictEqual(ctx.db.propiedadVenta(prop.id).estado, 'vendida');
+  // Corregir la oferta no hace retroceder el estado
+  await post(`/admin/lead/${lead.id}/negociacion`, { etapa: 'oferta', oferta_fecha: '2026-10-20', oferta_uf: '2950' });
+  assert.strictEqual(ctx.db.leadPorId(lead.id).estado, 'escriturado');
+  assert.match(await (await fetch(`${ctx.url}/admin/ventas`, { headers: h })).text(), /<strong>1<\/strong><span>Vendidos/);
+  // Ya vendida, no aparece en el formulario de compra
+  assert.doesNotMatch(await (await fetch(`${ctx.url}/comprar`)).text(), /Rosario Sur 91, depto 504, Las Condes · 3\.000 UF/);
+});
+
+test('SDO Capital · Ventas: completar datos no pide fecha de cambio ni la propiedad', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const lead = ctx.db.crearLead({ telefono: '56912340000', negocio: 'venta', estado: 'documentos_recibidos', propiedad: 'Rosario Sur 91' });
+  const form = await (await fetch(`${ctx.url}/datos/${lead.token}`)).text();
+  assert.doesNotMatch(form, /para cuándo te quieres cambiar/i);
+  assert.match(form, /logo-sdocapital\.png/);
+  const r = await fetch(`${ctx.url}/datos/${lead.token}`, { method: 'POST', body: new URLSearchParams({ nombre: 'Ana Compra', rut: '11.111.111-1', email: 'ana@example.com', telefono: '+56 9 1234 0000', ...PERSONALES }) });
+  assert.strictEqual(r.status, 200);
+  const l = ctx.db.leadPorId(lead.id);
+  assert.deepStrictEqual([l.nombre, l.propiedad, l.plazo_cambio], ['Ana Compra', 'Rosario Sur 91', null]);
+});

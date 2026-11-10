@@ -59,6 +59,22 @@ CREATE TABLE IF NOT EXISTS bloqueos (
 );
 CREATE INDEX IF NOT EXISTS idx_bloqueos_fecha ON bloqueos(fecha);
 
+-- SDO Capital · Ventas: departamentos en venta
+CREATE TABLE IF NOT EXISTS propiedades_venta (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  direccion TEXT NOT NULL,
+  comuna TEXT,
+  precio_uf REAL,
+  dormitorios INTEGER,
+  banos INTEGER,
+  m2 REAL,
+  url_aviso TEXT,
+  estado TEXT NOT NULL DEFAULT 'disponible', -- disponible | reservada | vendida | pausada
+  notas TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Horas que el equipo abre en días que normalmente no se trabaja (sábados)
 CREATE TABLE IF NOT EXISTS horas_habilitadas (
   fecha TEXT NOT NULL,
@@ -127,6 +143,14 @@ function migrar(db) {
   if (!leads.includes('avisos_agenda')) db.exec('ALTER TABLE leads ADD COLUMN avisos_agenda INTEGER DEFAULT 0');
   if (!leads.includes('datos_pedidos_at')) db.exec('ALTER TABLE leads ADD COLUMN datos_pedidos_at TEXT');
   if (!leads.includes('rechazado_at')) db.exec('ALTER TABLE leads ADD COLUMN rechazado_at TEXT');
+  // SDO Capital · Ventas: tipo de negocio, datos de compra y negociación (oferta → reserva → promesa → escritura)
+  for (const col of [
+    "negocio TEXT DEFAULT 'arriendo'", 'para_que TEXT', 'pie_uf REAL', 'renta_liquida INTEGER', 'banco_preaprobacion TEXT', 'monto_preaprobado_uf REAL',
+    'plazo_compra TEXT', 'propiedad_venta_id INTEGER', 'oferta_fecha TEXT', 'oferta_uf REAL', 'oferta_condiciones TEXT', 'reserva_fecha TEXT',
+    'reserva_monto TEXT', 'reserva_forma TEXT', 'promesa_fecha TEXT', 'promesa_notaria TEXT', 'escritura_estimada TEXT', 'escritura_fecha TEXT',
+  ]) {
+    if (!leads.includes(col.split(' ')[0])) db.exec(`ALTER TABLE leads ADD COLUMN ${col}`);
+  }
   // Papelera: canceló su visita, no asistió o no continúa. Sale de las listas de trabajo sin borrarse
   if (!leads.includes('papelera_at')) {
     db.exec('ALTER TABLE leads ADD COLUMN papelera_at TEXT');
@@ -313,7 +337,7 @@ function crearRepositorio(db) {
     visitasEntre: (desde, hasta) =>
       db
         .prepare(
-          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.url_publicacion, l.tipo, l.portal FROM visitas v
+          `SELECT v.*, l.nombre, l.telefono, l.email, l.propiedad, l.url_publicacion, l.tipo, l.portal, l.negocio FROM visitas v
            JOIN leads l ON l.id = v.lead_id WHERE v.estado = 'confirmada' AND v.fecha BETWEEN ? AND ?
            ORDER BY v.fecha, v.hora`
         )
@@ -351,6 +375,19 @@ function crearRepositorio(db) {
     marcarResultadoPedido: (visitaId) => db.prepare(`UPDATE visitas SET resultado_pedido_at = datetime('now') WHERE id = ?`).run(visitaId),
     visitaPorId: (id) => db.prepare('SELECT * FROM visitas WHERE id = ?').get(id),
     todasLasVisitas: () => db.prepare('SELECT * FROM visitas ORDER BY id').all(),
+    // SDO Capital · Ventas
+    listarPropiedadesVenta: () => db.prepare(`SELECT * FROM propiedades_venta ORDER BY CASE estado WHEN 'disponible' THEN 0 WHEN 'reservada' THEN 1 WHEN 'pausada' THEN 2 ELSE 3 END, direccion`).all(),
+    propiedadVenta: (id) => db.prepare('SELECT * FROM propiedades_venta WHERE id = ?').get(Number(id)),
+    guardarPropiedadVenta(datos, id = null) {
+      const campos = ['direccion', 'comuna', 'precio_uf', 'dormitorios', 'banos', 'm2', 'url_aviso', 'estado', 'notas'].filter((c) => c in datos);
+      if (id) {
+        db.prepare(`UPDATE propiedades_venta SET ${campos.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ?`).run(...campos.map((c) => datos[c] ?? null), id);
+        return repo.propiedadVenta(id);
+      }
+      const r = db.prepare(`INSERT INTO propiedades_venta (${campos.join(',')}) VALUES (${campos.map(() => '?').join(',')})`).run(...campos.map((c) => datos[c] ?? null));
+      return repo.propiedadVenta(Number(r.lastInsertRowid));
+    },
+    eliminarPropiedadVenta: (id) => db.prepare('DELETE FROM propiedades_venta WHERE id = ?').run(Number(id)),
     aPapelera: (leadId, motivo) =>
       db.prepare("UPDATE leads SET papelera_at = datetime('now'), papelera_motivo = ? WHERE id = ?").run(String(motivo || '').slice(0, 300) || null, leadId),
     sacarDePapelera: (leadId) => db.prepare('UPDATE leads SET papelera_at = NULL, papelera_motivo = NULL WHERE id = ?').run(leadId),

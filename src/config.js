@@ -63,6 +63,8 @@ function cargarConfig(env = process.env) {
       ),
       // Quien hace las visitas: a él se le pide el resultado; el resto del equipo recibe su respuesta
       ejecutivoVisitas: lista(env.EMAIL_EJECUTIVO_VISITAS, 'julio.mendoza@sdorent.cl'),
+      // SDO Capital · Ventas: postulaciones de compra, negociación y avisos de venta
+      ventas: lista(env.EMAIL_VENTAS, 'sdopropiedades@sdorent.cl,csolisdeovando@sdocapital.cl,julio.mendoza@sdorent.cl'),
       from: env.EMAIL_FROM || 'SDO Rent <sdopropiedades@sdorent.cl>',
       maxAdjuntosMB: Number(env.EMAIL_MAX_ADJUNTOS_MB || 20),
       smtp: {
@@ -95,6 +97,18 @@ function cargarConfig(env = process.env) {
         .filter((par) => par.indexOf(':') > 0)
         .map((par) => ({ usuario: par.slice(0, par.indexOf(':')).trim().toLowerCase(), clave: par.slice(par.indexOf(':') + 1) }))
         .filter((u) => u.usuario && u.clave),
+    },
+    // SDO Capital · Ventas: reglas para calificar a un comprador (el equipo decide igual)
+    venta: {
+      empresa: env.VENTA_EMPRESA_NOMBRE || 'SDO Capital',
+      pieMinimo: Number(env.VENTA_PIE_MINIMO || 0.2), // 20% del precio
+      cargaMaxima: Number(env.VENTA_CARGA_MAXIMA || 0.25), // dividendo hasta 25% de la renta líquida
+      tasaAnual: Number(env.VENTA_TASA_ANUAL || 0.045), // tasa de referencia para estimar el dividendo
+      plazoAnios: Number(env.VENTA_PLAZO_ANIOS || 30),
+      // Valor de la UF si no se puede consultar en línea (mindicador.cl)
+      valorUf: Number(env.VALOR_UF || 40000),
+      // Consultar la UF del día en línea (en las pruebas automáticas no se consulta)
+      ufEnLinea: bool(env.VALOR_UF_EN_LINEA, !process.env.NODE_TEST_CONTEXT),
     },
     // Clave para leer los indicadores en JSON desde otro sistema (panel de Cristian). Vacía = desactivado.
     indicadoresToken: env.INDICADORES_TOKEN || '',

@@ -426,3 +426,34 @@ form.mover-papelera { margin: 6px 0 10px; }
 .cal-panel .botones-confirmar .boton.chico { width: 100%; white-space: nowrap; padding: 2px 4px; }
 .cal-panel .botones-confirmar .boton.chico { box-sizing: border-box; font-size: 10.5px; padding: 2px 2px; overflow: hidden; text-overflow: ellipsis; }
 .cal-panel .botones-confirmar form:first-child:not(:last-child) { flex: 0 0 auto; }
+
+/* SDO Capital · Ventas */
+.opciones-tipo.cuatro { grid-template-columns: 1fr 1fr; }
+.tag-renta:not(.ok):not(.mal) { background: #fff4d6; color: #8a6100; }
+.tag-proposito { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 99px; white-space: nowrap; }
+.tag-proposito.vivir { background: #e3eefc; color: #1b4f9c; }
+.tag-proposito.invertir { background: #efe7fb; color: #5b3a9a; }
+.tag-venta { font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 99px; background: #2e4a8f; color: #fff; vertical-align: 1px; }
+.estado.oferta { background: #efe7fb; color: #5b3a9a; }
+.estado.reservado, .estado.promesa { background: #e3eefc; color: #1b4f9c; }
+.estado.escriturado { background: var(--verde-claro); color: var(--verde-texto); }
+.estado.visitado { background: var(--verde-claro); color: var(--verde-texto); }
+.estado.prop-disponible { background: var(--verde-claro); color: var(--verde-texto); }
+.estado.prop-reservada { background: #e3eefc; color: #1b4f9c; }
+.estado.prop-vendida, .estado.prop-pausada { background: #eceff1; color: #546e7a; }
+.calificacion { border: 1px solid var(--borde); border-left: 4px solid #e0a100; border-radius: 8px; padding: 10px 14px; margin: 14px 0; }
+.calificacion.ok { border-left-color: var(--verde); }
+.calificacion.mal { border-left-color: var(--rojo); }
+.calificacion h3 { margin: 0 0 6px; font-size: 15px; }
+.calificacion ul { list-style: none; padding: 0; margin: 0; }
+.calificacion li { margin: 6px 0; }
+.calificacion small { color: var(--suave); }
+.negociacion h3 { margin: 18px 0 8px; }
+.etapa-negociacion { border: 1px solid var(--borde); border-radius: 8px; padding: 8px 12px; margin: 6px 0; }
+.etapa-negociacion.hecha { background: #f4fbf6; }
+.etapa-negociacion summary { cursor: pointer; }
+.etapa-negociacion form { margin-top: 10px; }
+.grilla .ancho { grid-column: 1 / -1; }
+.editar-propiedad-venta summary { list-style: none; display: inline-block; }
+.editar-propiedad-venta[open] { min-width: min(560px, 80vw); }
+.editar-propiedad-venta form { margin-top: 8px; }

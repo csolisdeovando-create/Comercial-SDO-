@@ -164,6 +164,12 @@ const ETIQUETAS_CAMPO = {
 function camposFaltantes(lead) {
   const faltan = Object.entries(ETIQUETAS_CAMPO).filter(([c]) => !lead[c]).map(([, t]) => t);
   if (!lead.propiedad || String(lead.propiedad).includes('(falta dirección)')) faltan.push('Dirección de la propiedad de interés');
+  // Venta: la propiedad puede venir del listado (sin link ni fecha de cambio)
+  if (lead.negocio === 'venta') {
+    if (lead.propiedad_venta_id) return faltan.filter((t) => t !== 'Dirección de la propiedad de interés');
+    if (!lead.url_publicacion) faltan.push('Link de la publicación');
+    return faltan;
+  }
   if (!lead.url_publicacion) faltan.push('Link de la publicación');
   if (!lead.plazo_cambio) faltan.push('Fecha de cambio');
   if (lead.complementa) {

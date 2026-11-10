@@ -1,8 +1,9 @@
 const fs = require('node:fs');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { esc, formatearRut, firmar, tamanoLegible } = require('./utils');
 const { filasPersona, documentoTexto, PLAZOS_CAMBIO, camposFaltantes } = require('./personas');
 const { faltaDireccion } = require('./publicacion');
-const { REQUISITOS, nombreRequisito, textoRequisitosWhatsapp } = require('./requisitos');
+const { REQUISITOS, requisitosDe, nombreRequisito, textoRequisitosWhatsapp } = require('./requisitos');
 const { describirBloque, generarICS, textoDias } = require('./agenda');
 
 // Número de versión creciente para que los calendarios reemplacen el evento anterior
@@ -18,8 +19,30 @@ function resultadoBreal(visita) {
 }
 const TEXTO_RESULTADO = { realizada: '✅ Visitó y continúa', no_asistio: '⚠️ No asistió', no_continua: '❌ No continúa' };
 
+// Opciones de compra que se muestran en correos y panel (SDO Capital · Ventas)
+const PARA_QUE = { vivir: 'Para vivir', invertir: 'Para invertir (arrendar)' };
+const PLAZOS_COMPRA = { inmediato: 'Inmediato', '1_3_meses': '1 a 3 meses', '3_6_meses': '3 a 6 meses', mas_6_meses: 'Más de 6 meses' };
+const ufTexto = (x) => (x === null || x === undefined || x === '' ? null : `${Number(x).toLocaleString('es-CL', { maximumFractionDigits: 1 })} UF`);
+const pesosTexto = (x) => (x === null || x === undefined || x === '' ? null : `$${Math.round(Number(x)).toLocaleString('es-CL')}`);
+// Filas de compra de un interesado de venta: [etiqueta, valor]
+const filasCompra = (lead) =>
+  [
+    ['Forma de compra', requisitosDe(lead.tipo)?.etiqueta],
+    ['¿Para qué compra?', PARA_QUE[lead.para_que]],
+    ['Pie disponible', ufTexto(lead.pie_uf)],
+    ['Renta líquida', pesosTexto(lead.renta_liquida)],
+    ['Banco preaprobación', lead.banco_preaprobacion],
+    ['Monto preaprobado', ufTexto(lead.monto_preaprobado_uf)],
+    ['¿Cuándo quiere comprar?', PLAZOS_COMPRA[lead.plazo_compra]],
+  ].filter(([, v]) => v);
+
+// Marca de cada envío: los interesados de venta reciben correos de SDO Capital
+const marcaEnvio = new AsyncLocalStorage();
+
 function crearNotificaciones({ config, mailer, whatsapp, db }) {
-  const linkPostular = (lead) => `${config.baseUrl}/postular/${lead.token}`;
+  const esVenta = () => marcaEnvio.getStore()?.negocio === 'venta';
+  const empresa = () => (esVenta() ? config.venta?.empresa || 'SDO Capital' : config.empresa.nombre);
+  const linkPostular = (lead) => `${config.baseUrl}/${lead.negocio === 'venta' ? 'comprar' : 'postular'}/${lead.token}`;
   const linkAgenda = (lead) => `${config.baseUrl}/agendar/${lead.token}`;
   const firmaRevision = (id) => firmar(config.secret, 'revision', id);
   const firmaResultado = (visitaId) => firmar(config.secret, 'resultado', visitaId);
@@ -32,7 +55,9 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
     <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:10px;overflow:hidden">
       <tr><td style="background:#ffffff;padding:16px 24px 12px;border-bottom:3px solid #00c3ca">
-        <img src="${config.baseUrl}/static/logo.png" alt="${esc(config.empresa.nombre)}" width="96" height="49" style="display:block;border:0">
+        ${esVenta()
+          ? `<img src="${config.baseUrl}/static/logo-sdocapital.png" alt="${esc(empresa())}" width="90" height="48" style="display:block;border:0">`
+          : `<img src="${config.baseUrl}/static/logo.png" alt="${esc(empresa())}" width="96" height="49" style="display:block;border:0">`}
       </td></tr>
       <tr><td style="padding:20px 24px 0;font-size:19px;font-weight:bold;color:#111417">${esc(titulo)}</td></tr>
       <tr><td style="padding:24px;font-size:15px;line-height:1.5">${contenido}</td></tr>
@@ -47,7 +72,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     const tabla = (filas) => `<table cellpadding="0" cellspacing="0" style="border:1px solid #e3e7ef;border-radius:8px;width:100%;margin:12px 0">${filas}</table>`;
     const titular = tabla(`
       ${filasPersona(lead).map(([k, v]) => fila(k, v)).join('')}
-      ${fila('Tipo', REQUISITOS[lead.tipo]?.etiqueta)}${fila('Razón social', lead.razon_social)}
+      ${lead.negocio === 'venta' ? filasCompra(lead).map(([k, v]) => fila(k, v)).join('') : fila('Tipo', REQUISITOS[lead.tipo]?.etiqueta)}${fila('Razón social', lead.razon_social)}
       ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
       ${fila('Propiedad de interés', lead.propiedad)}${fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
       ${lead.url_publicacion ? `<tr><td style="padding:6px 10px;color:#5a6478;width:150px">Link de publicación</td><td style="padding:6px 10px"><a href="${esc(lead.url_publicacion)}">Ver aviso</a></td></tr>` : ''}
@@ -57,6 +82,15 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         tabla(`${filasPersona(lead, 'comp_').map(([k, v]) => fila(k, v)).join('')}${fila('Tipo', REQUISITOS[lead.comp_tipo]?.etiqueta)}`)
       : '';
     return titular + comp;
+  };
+
+  // Calificación del comprador (3 reglas) para el correo al equipo de ventas
+  const bloqueCalificacion = (c) => {
+    const icono = (x) => (x === true ? '✅' : x === false ? '❌' : '⏳');
+    const titulo = c.cumple === true ? '✅ Cumple las 3 condiciones' : c.cumple === false ? '❌ No cumple todas las condiciones' : '⏳ Falta información para calificar';
+    return `<div style="border:1px solid #e3e7ef;border-radius:8px;padding:10px 14px;margin:12px 0"><p style="margin:0 0 6px"><strong>Calificación: ${titulo}</strong></p>
+      ${c.reglas.map((r) => `<p style="margin:4px 0">${icono(r.cumple)} <strong>${esc(r.nombre)}</strong><br><span style="color:#5a6478">${esc(r.detalle)}</span></p>`).join('')}
+      <p style="margin:6px 0 0;color:#5a6478;font-size:13px">Es una guía: el equipo decide si aprueba.</p></div>`;
   };
 
   async function enviarWhatsappSeguro(lead, texto, parametrosPlantilla) {
@@ -79,7 +113,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     }
   }
 
-  return {
+  const metodos = {
     linkPostular,
     linkAgenda,
     firmaRevision,
@@ -90,12 +124,45 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       const origen = lead.portal ? ` que viste en *${lead.portal}*` : '';
       const horas = config.agenda.horas.map((h) => `${h}:00`).join(', ');
       return (
-        `${saludo} Gracias por escribir a *${config.empresa.nombre}* por la propiedad${origen}.\n\n` +
+        `${saludo} Gracias por escribir a *${empresa()}* por la propiedad${origen}.\n\n` +
         `Para avanzar con tu postulación y coordinar una visita, completa tus datos y sube tus documentos en este link:\n` +
         `👉 ${linkPostular(lead)}\n\n` +
         `${textoRequisitosWhatsapp()}\n\n` +
         `Una vez revisados tus documentos te enviaremos un calendario para agendar tu visita (${textoDias(config.agenda)}, ${horas} hrs). 📅`
       );
+    },
+
+    textoBienvenidaVenta(lead) {
+      const saludo = lead.nombre ? `¡Hola ${primerNombre(lead)}! 👋` : '¡Hola! 👋';
+      const origen = lead.portal ? ` que viste en *${lead.portal}*` : '';
+      return (
+        `${saludo} Gracias por escribir a *${config.venta?.empresa || 'SDO Capital'}* por el departamento en venta${origen}.\n\n` +
+        `Para coordinar una visita, completa tus datos y antecedentes de compra en este link (toma unos minutos):\n👉 ${linkPostular(lead)}\n\n` +
+        `Te pediremos tu cédula y, según cómo compres, la preaprobación del banco y el respaldo del pie. Una vez revisados te enviaremos un calendario para agendar la visita. 📅`
+      );
+    },
+
+    // Negociación de una compra (oferta, reserva, promesa, escritura): aviso al equipo de ventas
+    async negociacionRegistrada(lead, etapa, propiedad = null) {
+      const ETAPAS = {
+        oferta: ['💬 Oferta', `Ofreció ${ufTexto(lead.oferta_uf) || '—'}${lead.oferta_condiciones ? ` · ${esc(lead.oferta_condiciones)}` : ''}`],
+        reserva: ['📌 Reserva', `Reservó el ${esc(lead.reserva_fecha || '')}${lead.reserva_monto ? ` · ${esc(lead.reserva_monto)}` : ''}${lead.reserva_forma ? ` (${esc(lead.reserva_forma)})` : ''}`],
+        promesa: ['✍️ Promesa', `Firmó la promesa el ${esc(lead.promesa_fecha || '')}${lead.promesa_notaria ? ` en ${esc(lead.promesa_notaria)}` : ''}${lead.escritura_estimada ? ` · escritura estimada ${esc(lead.escritura_estimada)}` : ''}`],
+        escritura: ['🔑 Escritura', `Escritura firmada el ${esc(lead.escritura_fecha || '')}. ¡Venta cerrada!`],
+      };
+      const [titulo, detalle] = ETAPAS[etapa];
+      await mailer
+        .enviar({
+          to: config.correo.ventas,
+          subject: `${titulo}: ${lead.nombre}${propiedad ? ` · ${propiedad.direccion}` : lead.propiedad ? ` · ${lead.propiedad}` : ''}`,
+          html: correoHTML(
+            titulo,
+            `<p style="font-size:17px">${detalle}</p>${propiedad ? `<p>🏢 ${esc(propiedad.direccion)}${propiedad.precio_uf ? ` · ${ufTexto(propiedad.precio_uf)}` : ''}</p>` : ''}${tablaLead(lead)}
+             <p>Recuerda registrarlo en Breal (Reserva tipo «Venta»).</p>
+             <p>${boton('Ver ficha', `${config.baseUrl}/admin/lead/${lead.id}`, '#111417')}</p>`
+          ),
+        })
+        .catch((e) => console.error('[correo] aviso de negociación falló:', e.message));
     },
 
     textoYaPostulado(lead) {
@@ -112,7 +179,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     },
 
     // 1) Documentos -> sdopropiedades@sdorent.cl (Bárbara)
-    async documentosRecibidos(lead, documentos, { actualizacion = false } = {}) {
+    async documentosRecibidos(lead, documentos, { actualizacion = false, calificacion = null } = {}) {
       // Adjunta los archivos que quepan en el límite del correo; el resto queda como link de descarga
       const limite = config.correo.maxAdjuntosMB * 1024 * 1024;
       let acumulado = 0;
@@ -138,16 +205,16 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
            <p style="color:#5a6478;font-size:13px">Los documentos también quedan guardados en el <a href="${config.baseUrl}/admin/lead/${lead.id}">panel comercial</a> (descarga individual o en ZIP).</p>`;
 
       await mailer.enviar({
-        to: config.correo.documentos,
+        to: esVenta() ? config.correo.ventas : config.correo.documentos,
         replyTo: lead.email || undefined,
-        subject: `${actualizacion ? 'Actualización de documentos' : 'Nueva postulación'}: ${lead.nombre} (${REQUISITOS[lead.tipo]?.etiqueta || lead.tipo})${lead.propiedad ? ` – ${lead.propiedad}` : ''}`,
+        subject: `${actualizacion ? 'Actualización de documentos' : esVenta() ? '🏢 Nueva postulación de COMPRA' : 'Nueva postulación'}: ${lead.nombre} (${requisitosDe(lead.tipo)?.etiqueta || lead.tipo})${lead.propiedad ? ` – ${lead.propiedad}` : ''}`,
         html: correoHTML(
           actualizacion ? 'Actualización de documentos' : 'Nueva postulación',
           `<p>${
             actualizacion
               ? '<strong>El interesado volvió a enviar documentos</strong> para su postulación en revisión. Estos son los archivos nuevos; los anteriores siguen en el panel.'
               : 'Llegó una nueva postulación con documentos.'
-          }</p>${tablaLead(lead)}
+          }</p>${tablaLead(lead)}${calificacion ? bloqueCalificacion(calificacion) : ''}
            <p><strong>Documentos (${documentos.length}):</strong></p><ul>${lista}</ul>
            <p style="color:#5a6478">${
              sinAdjuntar === 0
@@ -168,7 +235,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       await mailer
         .enviar({
           to: lead.email,
-          subject: `Recibimos tu postulación – ${config.empresa.nombre}`,
+          subject: `Recibimos tu postulación – ${empresa()}`,
           html: correoHTML(
             'Postulación recibida',
             `<p>Hola ${esc(primerNombre(lead))},</p><p>Recibimos tus datos y documentos. ${
@@ -187,7 +254,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       await mailer
         .enviar({
           to: lead.email,
-          subject: `${recordatorio ? 'Recordatorio: aún puedes agendar tu visita' : 'Agenda tu visita'} – ${config.empresa.nombre}`,
+          subject: `${recordatorio ? 'Recordatorio: aún puedes agendar tu visita' : 'Agenda tu visita'} – ${empresa()}`,
           html: correoHTML(
             recordatorio ? 'Agenda tu visita' : 'Agenda tu visita',
             `<p>Hola ${esc(primerNombre(lead))},</p>
@@ -218,7 +285,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       const faltan = camposFaltantes(lead);
       await mailer.enviar({
         to: lead.email,
-        subject: `Completa tus datos para tu arriendo – ${config.empresa.nombre}`,
+        subject: `Completa tus datos para tu arriendo – ${empresa()}`,
         html: correoHTML(
           'Completa tus datos',
           `<p>Hola ${esc(primerNombre(lead))},</p>
@@ -234,7 +301,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
     async datosCompletados(lead) {
       await mailer
         .enviar({
-          to: config.correo.documentos,
+          to: esVenta() ? config.correo.ventas : config.correo.documentos,
           subject: `📝 ${lead.nombre} completó sus datos`,
           html: correoHTML(
             'Datos completados',
@@ -249,7 +316,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       const link = linkPostular(lead);
       await mailer.enviar({
         to: lead.email,
-        subject: `Sobre tu postulación – ${config.empresa.nombre}`,
+        subject: `Sobre tu postulación – ${empresa()}`,
         html: correoHTML(
           'Tu postulación',
           `<p>Hola ${esc(primerNombre(lead))},</p><p>Revisamos tu postulación:</p>
@@ -305,7 +372,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       await mailer
         .enviar({
           to: lead.email,
-          subject: `Dirección de tu visita: ${lead.propiedad} – ${config.empresa.nombre}`,
+          subject: `Dirección de tu visita: ${lead.propiedad} – ${empresa()}`,
           html: correoHTML(
             'Dirección de tu visita',
             `<p>Hola ${esc(primerNombre(lead))},</p>
@@ -323,7 +390,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       await mailer
         .enviar({
           to: lead.email,
-          subject: `Tu visita del ${cuando} fue cancelada – ${config.empresa.nombre}`,
+          subject: `Tu visita del ${cuando} fue cancelada – ${empresa()}`,
           html: correoHTML(
             'Visita cancelada',
             `<p>Hola ${esc(primerNombre(lead))},</p><p>Tuvimos que cancelar tu visita del <strong>${esc(cuando)}</strong>. Disculpa las molestias.</p>
@@ -348,7 +415,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       // La dirección va primero: es lo que se alcanza a leer en la vista semanal (la hora ya la muestra el calendario)
       const titulo = `${confirmada ? '✅ ' : ''}🏠 ${direccion} · ${lead.nombre || 'Interesado'} · ${tel}`;
       const descripcion = [
-        `VISITA ${config.empresa.nombre.toUpperCase()}`,
+        `VISITA ${empresa().toUpperCase()}`,
         `📅 ${describirBloque(visita.fecha, visita.hora)}`,
         confirmada ? '✅ El interesado CONFIRMÓ su asistencia' : '⏳ Pendiente de confirmación del interesado',
         '',
@@ -399,7 +466,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         hora: visita.hora,
         duracionMinutos: config.agenda.duracionMinutos,
         zona: config.zonaHoraria,
-        titulo: `Visita propiedad ${config.empresa.nombre}${lead.propiedad ? ` – ${lead.propiedad}` : ''}`,
+        titulo: `Visita propiedad ${empresa()}${lead.propiedad ? ` – ${lead.propiedad}` : ''}`,
         descripcion: `Visita a la propiedad${lead.propiedad ? ` ${lead.propiedad}` : ''}.\nSi necesitas cambiar el horario: ${linkAgenda(lead)}`,
         ubicacion: lead.propiedad || '',
         organizador: config.correo.from.match(/<([^>]+)>/)?.[1] || config.correo.documentos[0],
@@ -436,7 +503,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       await mailer
         .enviar({
           to: lead.email,
-          subject: `${titulo}: ${cuando} – ${config.empresa.nombre}`,
+          subject: `${titulo}: ${cuando} – ${empresa()}`,
           html: correoHTML(
             titulo,
             `<p>Hola ${esc(primerNombre(lead))},</p>
@@ -466,7 +533,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       const confirmar = `${config.baseUrl}/visita/${lead.token}/confirmar`;
       await mailer.enviar({
         to: lead.email,
-        subject: `Confirma tu visita: ${cuando} – ${config.empresa.nombre}`,
+        subject: `Confirma tu visita: ${cuando} – ${empresa()}`,
         html: correoHTML(
           'Confirma tu visita',
           `<p>Hola ${esc(primerNombre(lead))},</p><p>Tienes una visita agendada:</p>
@@ -490,7 +557,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
         await mailer
           .enviar({
             to: lead.email,
-            subject: `✅ Tu visita está confirmada: ${cuando} – ${config.empresa.nombre}`,
+            subject: `✅ Tu visita está confirmada: ${cuando} – ${empresa()}`,
             html: correoHTML(
               'Visita confirmada',
               `<p>Hola ${esc(primerNombre(lead))},</p><p>Te confirmamos tu visita:</p>
@@ -531,7 +598,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       await mailer
         .enviar({
           to: lead.email,
-          subject: `Cancelaste tu visita del ${cuando} – ${config.empresa.nombre}`,
+          subject: `Cancelaste tu visita del ${cuando} – ${empresa()}`,
           html: correoHTML(
             'Visita cancelada',
             `<p>Hola ${esc(primerNombre(lead))},</p><p>Cancelamos tu visita del <strong>${esc(cuando)}</strong>, como pediste.</p>
@@ -605,7 +672,7 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       }[resultado];
       if (!contenido) return;
       await mailer
-        .enviar({ to: lead.email, subject: `${contenido.asunto} – ${config.empresa.nombre}`, html: correoHTML(contenido.asunto, contenido.html) })
+        .enviar({ to: lead.email, subject: `${contenido.asunto} – ${empresa()}`, html: correoHTML(contenido.asunto, contenido.html) })
         .catch((e) => console.error('[correo] seguimiento de visita falló:', e.message));
       await enviarWhatsappSeguro(lead, contenido.wa);
     },
@@ -624,6 +691,15 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       });
     },
   };
+  // Todo lo que recibe un interesado como primer dato se envía con su marca (SDO Rent o SDO Capital)
+  for (const [nombre, fn] of Object.entries(metodos)) {
+    if (typeof fn !== 'function') continue;
+    metodos[nombre] = function (...args) {
+      const lead = args[0];
+      return lead && typeof lead === 'object' && 'token' in lead ? marcaEnvio.run({ negocio: lead.negocio }, () => fn.apply(metodos, args)) : fn.apply(metodos, args);
+    };
+  }
+  return metodos;
 }
 
-module.exports = { crearNotificaciones, MOTIVOS_NO_CONTINUA, resultadoBreal };
+module.exports = { crearNotificaciones, MOTIVOS_NO_CONTINUA, resultadoBreal, PARA_QUE, PLAZOS_COMPRA, filasCompra };

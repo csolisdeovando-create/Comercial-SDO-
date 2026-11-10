@@ -6,7 +6,8 @@ const express = require('express');
 const multer = require('multer');
 const archiver = require('archiver');
 
-const { REQUISITOS, TIPOS, PREFIJO_COMP, esComplemento, todosLosCampos, nombreRequisito } = require('./requisitos');
+const { REQUISITOS, REQUISITOS_VENTA, FORMAS_COMPRA, TIPOS, PREFIJO_COMP, esComplemento, todosLosCampos, nombreRequisito } = require('./requisitos');
+const { crearValorUf } = require('./calificacion');
 const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias, horasDe, esSabado } = require('./agenda');
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
@@ -18,6 +19,7 @@ const { calcularIndicadores, detalleInteresados, seguimientoAnonimo } = require(
 const { validarPersona, CAMPOS_PERSONA, filasPersona, PLAZOS_CAMBIO, camposFaltantes } = require('./personas');
 const { esc, formatearRut, rutValido, limpiarRut, normalizarTelefono, emailValido, firmar, firmaCorrecta } = require('./utils');
 const vistas = require('./views');
+const vistasVentas = require('./vistasVentas');
 
 const MIMES_PERMITIDOS = /^(application\/pdf|image\/(jpeg|png|webp|heic|heif))$/;
 const EXT_PERMITIDAS = /\.(pdf|jpe?g|png|webp|heic|heif)$/i;
@@ -28,6 +30,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   // Los sábados se agregan las horas que el equipo habilita en el calendario del panel
   const cfgAgenda = { ...config.agenda, zonaHoraria: config.zonaHoraria, horasExtra: (fecha) => db.horasHabilitadas(fecha) };
   const configVista = { ...config, agenda: cfgAgenda };
+  // SDO Capital · Ventas: UF del día para estimar el dividendo
+  const valorUf = crearValorUf({ respaldo: config.venta.valorUf, fetchFn: config.venta.ufEnLinea ? fetch : null });
   const opcVista = { empresa: config.empresa.nombre };
   const tareas = new Set(); // procesos en segundo plano (útil para pruebas)
   app.locals.esperarTareas = () => Promise.allSettled([...tareas]);
@@ -211,7 +215,20 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     const url_publicacion = pub?.url || null;
     const propiedad = resumenPropiedad(pub) || (portal ? texto.slice(0, 300) : null);
     if (!lead) {
-      lead = db.crearLead({ telefono, nombre: nombrePerfil || null, portal: portal || pub?.portal || null, propiedad, url_publicacion, mensaje_inicial: texto.slice(0, 1000) });
+      // ¿Viene de un aviso de venta? (link de una propiedad del listado o el mensaje habla de comprar)
+      const sinParametros = (u) => String(u || '').split(/[?#]/)[0].replace(/\/$/, '').toLowerCase();
+      const propVenta = url_publicacion ? db.listarPropiedadesVenta().find((p) => p.url_aviso && sinParametros(p.url_aviso) === sinParametros(url_publicacion)) : null;
+      const negocio = propVenta || /\b(venta|vendo|vende|vender|comprar|compra)\b/i.test(texto) ? 'venta' : 'arriendo';
+      lead = db.crearLead({
+        telefono,
+        nombre: nombrePerfil || null,
+        portal: portal || pub?.portal || null,
+        propiedad: propVenta ? [propVenta.direccion, propVenta.comuna].filter(Boolean).join(', ') : propiedad,
+        propiedad_venta_id: propVenta ? propVenta.id : null,
+        url_publicacion,
+        mensaje_inicial: texto.slice(0, 1000),
+        negocio,
+      });
     } else if (lead.estado === 'contactado' && (portal || propiedad)) {
       // Nueva consulta por otra propiedad antes de postular: se actualiza el interés
       lead = db.actualizarLead(lead.id, {
@@ -228,7 +245,11 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     if (ahora().getTime() - ultimo < config.whatsapp.enfriamientoHoras * 3600 * 1000) return;
 
     const respuesta =
-      lead.estado === 'contactado' || lead.estado === 'rechazado' ? notif.textoBienvenida(lead) : notif.textoYaPostulado(lead);
+      lead.estado === 'contactado' || lead.estado === 'rechazado'
+        ? lead.negocio === 'venta'
+          ? notif.textoBienvenidaVenta(lead)
+          : notif.textoBienvenida(lead)
+        : notif.textoYaPostulado(lead);
     if (!respuesta) return;
 
     whatsapp.marcarLeido(msg.id);
@@ -296,6 +317,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   }
 
   function mostrarFormulario(req, res, lead) {
+    if (lead?.negocio === 'venta') return res.redirect(`/comprar/${lead.token}`);
     if (lead && ['aprobado', 'agendado', 'no_asistio'].includes(lead.estado)) return res.redirect(`/agendar/${lead.token}`);
     if (lead && lead.estado === 'documentos_recibidos') {
       return res.send(
@@ -318,7 +340,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     if (!lead) return;
     const b = req.body || {};
     const titular = validarPersona(b, '', '', ahora());
-    const errores = [...titular.errores, ...validarPropiedad(b)];
+    const venta = lead.negocio === 'venta'; // en compra la propiedad ya viene del listado o de su postulación
+    const errores = [...titular.errores, ...(venta ? [] : validarPropiedad(b))];
     const quienComp = lead.comp_rol === 'aval' ? 'quien es aval' : 'quien complementa renta';
     const comp = lead.complementa ? validarPersona(b, PREFIJO_COMP, quienComp, ahora()) : null;
     if (comp) {
@@ -327,12 +350,10 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       if (comp.datos.comp_rut && comp.datos.comp_rut === titular.datos.rut) errores.push('Tu aval o complemento debe ser otra persona (el documento es el mismo).');
     }
     if (errores.length) return res.status(422).send(vistas.formularioDatos({ lead, valores: { ...lead, ...b }, errores, config }));
-    const pub = await leerPublicacion(String(b.url_publicacion).slice(0, 2000), { timeoutMs: 3000 });
+    const pub = venta ? null : await leerPublicacion(String(b.url_publicacion).slice(0, 2000), { timeoutMs: 3000 });
     lead = db.actualizarLead(lead.id, {
       ...titular.datos,
-      propiedad: String(b.propiedad).trim().slice(0, 300),
-      url_publicacion: pub?.url || lead.url_publicacion,
-      plazo_cambio: b.plazo_cambio,
+      ...(venta ? {} : { propiedad: String(b.propiedad).trim().slice(0, 300), url_publicacion: pub?.url || lead.url_publicacion, plazo_cambio: b.plazo_cambio }),
       ...(comp ? { ...comp.datos, comp_relacion: String(b.comp_relacion).trim().slice(0, 80) } : {}),
     });
     await notif.datosCompletados(lead);
@@ -517,6 +538,159 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   app.post('/postular/:token', limitePostular, recibirPostulacion);
 
   // ------------------------------------------------------------------
+  // SDO Capital · Ventas: postulación de compra
+  // ------------------------------------------------------------------
+  const PLAZOS_COMPRA_VALIDOS = ['inmediato', '1_3_meses', '3_6_meses', 'mas_6_meses'];
+  const numero = (x) => {
+    const t = String(x ?? '').trim().replace(/\$|\s|UF/gi, '');
+    if (!t) return null;
+    // "2.500.000" o "2500000" en pesos; "700,5" en UF
+    const n = Number(/^\d{1,3}(\.\d{3})+$/.test(t) ? t.replace(/\./g, '') : t.replace(',', '.'));
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+  function mostrarFormularioCompra(req, res, lead) {
+    if (lead && lead.negocio !== 'venta' && lead.estado !== 'contactado') return res.redirect(`/postular/${lead.token}`);
+    if (lead && ['aprobado', 'agendado', 'no_asistio'].includes(lead.estado)) return res.redirect(`/agendar/${lead.token}`);
+    if (lead && lead.estado === 'documentos_recibidos') {
+      return res.send(vistas.mensaje('Antecedentes en revisión', 'Ya recibimos tus antecedentes y nuestro equipo los está revisando. Te avisaremos por correo y WhatsApp.', { ...opcVista, empresa: config.venta.empresa, marca: 'capital', icono: '⏳' }));
+    }
+    if (lead && ['oferta', 'reservado', 'promesa', 'escriturado', 'visitado'].includes(lead.estado)) {
+      return res.send(vistas.mensaje('Ya postulaste', 'Tu postulación ya está avanzada. Si necesitas algo, escríbenos por WhatsApp.', { ...opcVista, empresa: config.venta.empresa, marca: 'capital', icono: '👍' }));
+    }
+    res.send(vistasVentas.formularioCompra({ lead, propiedades: db.listarPropiedadesVenta(), config }));
+  }
+  app.get('/comprar', (req, res) => mostrarFormularioCompra(req, res, null));
+  app.get('/comprar/:token', (req, res) => {
+    const lead = leadDesdeToken(req, res);
+    if (lead) mostrarFormularioCompra(req, res, lead);
+  });
+
+  const recibirCompra = (req, res) => {
+    let lead = null;
+    if (req.params.token) {
+      lead = leadDesdeToken(req, res);
+      if (!lead) return;
+      if (!['contactado', 'rechazado'].includes(lead.estado)) return mostrarFormularioCompra(req, res, lead);
+    }
+    subir(req, res, async (err) => {
+      const b = req.body || {};
+      const errores = [];
+      if (err) {
+        errores.push(
+          err.code === 'LIMIT_FILE_SIZE'
+            ? `Uno de los archivos supera ${config.archivos.maxMB} MB. Intenta con una foto más liviana o un PDF comprimido.`
+            : err.code === 'LIMIT_UNEXPECTED_FILE'
+              ? `Puedes subir hasta ${config.archivos.maxPorRequisito} archivos por documento.`
+              : err.message
+        );
+      }
+      const tipo = FORMAS_COMPRA.includes(b.tipo) ? b.tipo : null;
+      if (!tipo) errores.push('Indica cómo vas a comprar (crédito, contado, subsidio o empresa).');
+      if (!['vivir', 'invertir'].includes(b.para_que)) errores.push('Indica si compras para vivir o para invertir.');
+      const titular = validarPersona(b, '', '', ahora());
+      errores.push(...titular.errores);
+      const propVenta = b.propiedad_venta_id ? db.propiedadVenta(b.propiedad_venta_id) : null;
+      if (!propVenta) {
+        if (pareceLink(b.propiedad)) {
+          if (!String(b.url_publicacion || '').trim()) b.url_publicacion = String(b.propiedad).trim();
+          b.propiedad = '';
+        }
+        if (!String(b.propiedad || '').trim()) errores.push('Elige el departamento de la lista o escribe su dirección.');
+        if (!interpretarUrl(String(b.url_publicacion || '').slice(0, 2000))) errores.push('Pega el link del aviso que viste (o elige el departamento de la lista).');
+      }
+      const pieUf = numero(b.pie_uf);
+      const renta = numero(b.renta_liquida);
+      const preaprobado = numero(b.monto_preaprobado_uf);
+      const banco = String(b.banco_preaprobacion || '').trim().slice(0, 80);
+      if (pieUf === null) errores.push('Indica cuánto tienes para el pie (en UF).');
+      if (['credito', 'subsidio'].includes(tipo) && renta === null) errores.push('Indica tu renta líquida mensual (o la del grupo que compra).');
+      if (tipo === 'credito' && (!banco || preaprobado === null)) errores.push('Indica el banco y el monto de tu preaprobación (en UF).');
+      if (!PLAZOS_COMPRA_VALIDOS.includes(b.plazo_compra)) errores.push('Indica para cuándo quieres comprar.');
+      if (tipo === 'empresa' && (!String(b.razon_social || '').trim() || !b.rut_empresa)) errores.push('Indica la razón social y el RUT de la empresa.');
+      if (b.rut_empresa && !rutValido(b.rut_empresa)) errores.push('El RUT de la empresa no es válido.');
+      if (!b.consentimiento) errores.push('Debes autorizar el uso de tus datos para evaluar la postulación.');
+      if (tipo && !err) {
+        for (const d of REQUISITOS_VENTA[tipo].documentos) {
+          const opcional = tipo === 'subsidio' && d.campo === 'preaprobacion';
+          if (!opcional && !req.files?.[d.campo]?.length) errores.push(`Falta adjuntar: ${d.nombre}.`);
+        }
+      }
+      const telefono = titular.telefono;
+      if (errores.length) {
+        borrarTemporales(req);
+        return res.status(422).send(vistasVentas.formularioCompra({ lead, valores: { ...b, telefono }, errores, propiedades: db.listarPropiedadesVenta(), config }));
+      }
+
+      // Sin link personal: se reutiliza su postulación de compra pendiente (mismo teléfono o RUT)
+      let actualizacion = false;
+      if (!lead) {
+        const previo = db.leadPorTelefono(telefono) || db.leadPorRut(titular.datos.rut);
+        if (previo && previo.negocio === 'venta' && ['contactado', 'rechazado'].includes(previo.estado)) lead = previo;
+        else if (previo && previo.negocio === 'venta' && previo.estado === 'documentos_recibidos') {
+          lead = previo;
+          actualizacion = true;
+        } else lead = db.crearLead({ telefono, portal: 'Formulario web', negocio: 'venta' });
+      }
+
+      const pub = !propVenta && b.url_publicacion ? await leerPublicacion(String(b.url_publicacion).slice(0, 2000), { timeoutMs: 3000 }) : null;
+      lead = db.actualizarLead(lead.id, {
+        negocio: 'venta',
+        tipo,
+        ...titular.datos,
+        razon_social: String(b.razon_social || '').trim().slice(0, 150) || null,
+        rut_empresa: b.rut_empresa ? limpiarRut(b.rut_empresa) : null,
+        propiedad_venta_id: propVenta ? propVenta.id : null,
+        propiedad: propVenta ? [propVenta.direccion, propVenta.comuna].filter(Boolean).join(', ') : String(b.propiedad || '').trim().slice(0, 300),
+        url_publicacion: propVenta ? propVenta.url_aviso || null : pub?.url || lead.url_publicacion || null,
+        portal: !lead.portal || lead.portal === 'Formulario web' ? pub?.portal || lead.portal : lead.portal,
+        para_que: b.para_que,
+        pie_uf: pieUf,
+        renta_liquida: renta === null ? null : Math.round(renta),
+        banco_preaprobacion: banco || null,
+        monto_preaprobado_uf: preaprobado,
+        plazo_compra: b.plazo_compra,
+        comentarios: String(b.comentarios || '').trim().slice(0, 2000) || null,
+        estado: 'documentos_recibidos',
+        motivo_rechazo: null,
+        documentos_at: new Date().toISOString(),
+        aprobado_at: null,
+      });
+
+      const carpeta = path.join(config.uploadsDir, String(lead.id));
+      fs.mkdirSync(carpeta, { recursive: true });
+      const documentos = [];
+      for (const d of REQUISITOS_VENTA[tipo].documentos) {
+        for (const f of req.files[d.campo] || []) {
+          const destino = path.join(carpeta, path.basename(f.path));
+          fs.renameSync(f.path, destino);
+          const doc = {
+            lead_id: lead.id,
+            requisito: d.campo,
+            nombre_original: path.basename(f.originalname).replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0, 120) || 'archivo',
+            ruta: destino,
+            mime: f.mimetype,
+            tamano: f.size,
+          };
+          doc.id = db.agregarDocumento(doc);
+          documentos.push(doc);
+        }
+      }
+      borrarTemporales(req);
+      const calificacion = vistasVentas.calificacionDe(lead, propVenta, config, valorUf.actual());
+      await notif.documentosRecibidos(lead, documentos, { actualizacion, calificacion }).catch((e) => console.error('[compra] error enviando notificaciones:', e));
+      res.send(
+        vistas.mensaje(
+          '¡Postulación enviada!',
+          `Gracias ${esc(lead.nombre.split(' ')[0])}. Recibimos tus antecedentes y ${documentos.length} archivo(s). Nuestro equipo los revisará y te enviaremos por correo y WhatsApp el calendario para agendar tu visita.`,
+          { ...opcVista, empresa: config.venta.empresa, marca: 'capital', icono: '✅' }
+        )
+      );
+    });
+  };
+  app.post('/comprar', limitePostular, recibirCompra);
+  app.post('/comprar/:token', limitePostular, recibirCompra);
+
+  // ------------------------------------------------------------------
   // Revisión de documentos (links firmados enviados a sdopropiedades@)
   // ------------------------------------------------------------------
   function leadRevision(req, res) {
@@ -562,7 +736,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
 
   const irResultado = (res, lead, firma, r) =>
     res.redirect(303, `/revision/${lead.id}/resultado?firma=${encodeURIComponent(firma)}&r=${r}`);
-  const yaAprobado = (lead) => ['aprobado', 'agendado', 'no_asistio', 'visitado'].includes(lead.estado);
+  const yaAprobado = (lead) => ['aprobado', 'agendado', 'no_asistio', 'visitado', 'oferta', 'reservado', 'promesa', 'escriturado'].includes(lead.estado);
 
   // GET solo muestra la confirmación: así los antivirus de correo que "visitan" links no aprueban nada
   app.get('/revision/:id/:accion', (req, res) => {
@@ -937,7 +1111,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   app.get('/admin', (req, res) => {
     const eliminado = req.query.eliminado ? String(req.query.eliminado).slice(0, 150) : null;
     const filtros = { q: String(req.query.q || '').trim().slice(0, 100), estado: String(req.query.estado || '') };
-    const todosConPapelera = db.listarLeads(5000);
+    const todosConPapelera = db.listarLeads(5000).filter((l) => l.negocio !== 'venta'); // ventas tiene su pestaña
     // La papelera queda fuera de las listas de trabajo; se ve con el filtro «Papelera»
     const papelera = todosConPapelera.filter((l) => l.papelera_at);
     const todos = todosConPapelera.filter((l) => !l.papelera_at);
@@ -1022,7 +1196,12 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     if (q.periodo === '90') return { clave: '90', desde: sumarDias(hoy, -89), hasta: hoy };
     return { clave: '30', desde: sumarDias(hoy, -29), hasta: hoy };
   }
-  const indicadores = (p) => calcularIndicadores({ leads: db.todosLosLeads(), visitas: db.todasLasVisitas(), desde: p.desde, hasta: p.hasta, hoy: hoyChile() });
+  const leadsArriendo = () => db.todosLosLeads().filter((l) => l.negocio !== 'venta');
+  const visitasArriendo = () => {
+    const ventas = new Set(db.todosLosLeads().filter((l) => l.negocio === 'venta').map((l) => l.id));
+    return db.todasLasVisitas().filter((v) => !ventas.has(v.lead_id));
+  };
+  const indicadores = (p) => calcularIndicadores({ leads: leadsArriendo(), visitas: visitasArriendo(), desde: p.desde, hasta: p.hasta, hoy: hoyChile() });
 
   app.get('/admin/indicadores', (req, res) => {
     const p = periodoIndicadores(req.query);
@@ -1156,6 +1335,10 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
   app.get('/admin/lead/:id', (req, res) => {
     const lead = leadAdmin(req, res);
     if (!lead) return;
+    if (lead.negocio === 'venta') {
+      lead.propiedadVenta = lead.propiedad_venta_id ? db.propiedadVenta(lead.propiedad_venta_id) : null;
+      lead.valorUf = valorUf.actual();
+    }
     res.send(
       vistas.fichaAdmin({
         lead,
@@ -1168,6 +1351,99 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         config,
       })
     );
+  });
+
+  // ------------------------------------------------------------------
+  // SDO Capital · Ventas: panel, propiedades y negociación
+  // ------------------------------------------------------------------
+  app.get('/admin/ventas', (req, res) => {
+    const filtros = { q: String(req.query.q || '').trim().slice(0, 100), estado: String(req.query.estado || '') };
+    const ventas = db.listarLeads(5000).filter((l) => l.negocio === 'venta');
+    const papelera = ventas.filter((l) => l.papelera_at);
+    const todos = ventas.filter((l) => !l.papelera_at);
+    let leads = filtros.estado === 'papelera' ? papelera : todos;
+    if (filtros.estado === 'negociacion') leads = leads.filter((l) => vistasVentas.EN_NEGOCIACION.includes(l.estado));
+    else if (filtros.estado && filtros.estado !== 'papelera') leads = leads.filter((l) => l.estado === filtros.estado);
+    if (filtros.q) {
+      const q = sinTildes(filtros.q);
+      const qRut = limpiarRut(filtros.q);
+      leads = leads.filter((l) => sinTildes([l.nombre, l.email, l.telefono, l.propiedad, l.razon_social, l.portal].join(' ')).includes(q) || (qRut.length >= 4 && (l.rut || '').includes(qRut)));
+    }
+    const ids = new Set(ventas.map((l) => l.id));
+    const recordados = req.query.recordados !== undefined ? Number(req.query.recordados) || 0 : null;
+    res.send(
+      vistasVentas.panelVentas({
+        leads: leads.slice(0, 300),
+        todos,
+        papelera,
+        propiedades: db.listarPropiedadesVenta(),
+        visitas: db.todasLasVisitas().filter((v) => ids.has(v.lead_id) && v.estado !== 'reagendada'),
+        filtros,
+        desde: sumarDias(hoyChile(), -90),
+        valorUf: valorUf.actual(),
+        recordados,
+        config,
+      })
+    );
+  });
+
+  const AVISOS_PROPIEDAD = { agregada: 'Propiedad agregada.', guardada: 'Cambios guardados.', eliminada: 'Propiedad eliminada.' };
+  app.get('/admin/ventas/propiedades', (req, res) => {
+    res.send(vistasVentas.propiedadesVenta({ propiedades: db.listarPropiedadesVenta(), aviso: AVISOS_PROPIEDAD[req.query.ok] || null, config }));
+  });
+  const datosPropiedad = (b) => {
+    const entero = (x) => (numero(x) === null ? null : Math.round(numero(x)));
+    return {
+      direccion: String(b.direccion || '').trim().slice(0, 200),
+      comuna: String(b.comuna || '').trim().slice(0, 80) || null,
+      precio_uf: numero(b.precio_uf),
+      dormitorios: entero(b.dormitorios),
+      banos: entero(b.banos),
+      m2: numero(b.m2),
+      url_aviso: /^https?:\/\//.test(String(b.url_aviso || '').trim()) ? String(b.url_aviso).trim().slice(0, 500) : null,
+      estado: vistasVentas.ESTADOS_PROPIEDAD[b.estado] ? b.estado : 'disponible',
+      notas: String(b.notas || '').trim().slice(0, 300) || null,
+    };
+  };
+  app.post('/admin/ventas/propiedades', formAdmin, (req, res) => {
+    const datos = datosPropiedad(req.body || {});
+    if (datos.direccion) db.guardarPropiedadVenta(datos);
+    res.redirect(303, '/admin/ventas/propiedades?ok=agregada');
+  });
+  app.post('/admin/ventas/propiedades/:pid', formAdmin, (req, res) => {
+    const p = db.propiedadVenta(req.params.pid);
+    const datos = datosPropiedad(req.body || {});
+    if (p && datos.direccion) db.guardarPropiedadVenta(datos, p.id);
+    res.redirect(303, '/admin/ventas/propiedades?ok=guardada');
+  });
+  app.post('/admin/ventas/propiedades/:pid/eliminar', formAdmin, (req, res) => {
+    db.eliminarPropiedadVenta(req.params.pid);
+    res.redirect(303, '/admin/ventas/propiedades?ok=eliminada');
+  });
+
+  // Negociación: oferta → reserva → promesa → escritura (la propiedad pasa a reservada / vendida)
+  const ETAPAS_NEGOCIACION = {
+    oferta: { estado: 'oferta', campos: ['oferta_fecha', 'oferta_uf', 'oferta_condiciones'], requeridos: ['oferta_fecha', 'oferta_uf'] },
+    reserva: { estado: 'reservado', campos: ['reserva_fecha', 'reserva_monto', 'reserva_forma'], requeridos: ['reserva_fecha', 'reserva_monto'], propiedad: 'reservada' },
+    promesa: { estado: 'promesa', campos: ['promesa_fecha', 'promesa_notaria', 'escritura_estimada'], requeridos: ['promesa_fecha'], propiedad: 'reservada' },
+    escritura: { estado: 'escriturado', campos: ['escritura_fecha'], requeridos: ['escritura_fecha'], propiedad: 'vendida' },
+  };
+  const ORDEN_ESTADOS = ['oferta', 'reservado', 'promesa', 'escriturado'];
+  app.post('/admin/lead/:id/negociacion', formAdmin, async (req, res) => {
+    let lead = leadAdmin(req, res);
+    if (!lead) return;
+    const b = req.body || {};
+    const e = ETAPAS_NEGOCIACION[b.etapa];
+    if (!e || lead.negocio !== 'venta' || e.requeridos.some((c) => !String(b[c] || '').trim())) return res.redirect(303, `/admin/lead/${lead.id}#negociacion`);
+    const cambios = Object.fromEntries(e.campos.map((c) => [c, c === 'oferta_uf' ? numero(b[c]) : String(b[c] || '').trim().slice(0, 200) || null]));
+    // El estado solo avanza (corregir una etapa anterior no lo hace retroceder)
+    if (ORDEN_ESTADOS.indexOf(e.estado) > ORDEN_ESTADOS.indexOf(lead.estado)) cambios.estado = e.estado;
+    lead = db.actualizarLead(lead.id, cambios);
+    if (lead.papelera_at) db.sacarDePapelera(lead.id);
+    const prop = lead.propiedad_venta_id ? db.propiedadVenta(lead.propiedad_venta_id) : null;
+    if (prop && e.propiedad && !(prop.estado === 'vendida' && e.propiedad === 'reservada')) db.guardarPropiedadVenta({ estado: e.propiedad }, prop.id);
+    if (b.avisar) await notif.negociacionRegistrada(lead, b.etapa, prop).catch((err) => console.error('[ventas] aviso negociación:', err));
+    res.redirect(303, `/admin/lead/${lead.id}?ok=negociacion#negociacion`);
   });
 
   app.get('/admin/documento/:docId', (req, res) => {
@@ -1222,6 +1498,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     resultado_aviso: 'Resultado guardado y mensaje enviado al interesado.',
     recordado: 'Le enviamos al interesado un recordatorio para que agende su visita.',
     confirmacion_pedida: 'Le pedimos al interesado que confirme su visita.',
+    negociacion: 'Negociación registrada.',
     confirmada_equipo: 'Visita confirmada. Se le avisó al interesado y se actualizó el calendario del equipo.',
     sin_correo: 'El interesado no tiene correo: confírmale por teléfono o WhatsApp y usa «Confirmar visita».',
     datos_pedidos: 'Le enviamos al interesado el link para que complete sus datos.',
@@ -1342,14 +1619,17 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     db.marcarAvisoAgenda(lead.id);
     res.redirect(303, `/admin/lead/${lead.id}?ok=recordado#visita`);
   });
-  app.post('/admin/recordar-agenda', formAdmin, async (_req, res) => {
+  app.post('/admin/recordar-agenda', formAdmin, async (req, res) => {
     const hace24h = new Date(ahora().getTime() - 24 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
-    const pendientes = db.listarLeads(100000).filter((l) => esperaAgenda(l) && (!l.aviso_agenda_at || l.aviso_agenda_at < hace24h));
+    const venta = req.body?.negocio === 'venta';
+    const pendientes = db
+      .listarLeads(100000)
+      .filter((l) => (l.negocio === 'venta') === venta && esperaAgenda(l) && (!l.aviso_agenda_at || l.aviso_agenda_at < hace24h));
     for (const l of pendientes) {
       await notif.enviarAgenda(l, { recordatorio: true }).catch((e) => console.error('[panel] recordar agenda:', e));
       db.marcarAvisoAgenda(l.id);
     }
-    res.redirect(303, `/admin?recordados=${pendientes.length}`);
+    res.redirect(303, `${venta ? '/admin/ventas' : '/admin'}?recordados=${pendientes.length}`);
   });
 
   // Valor del arriendo (base del requisito de renta) y volver a leer los documentos

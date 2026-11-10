@@ -1,5 +1,5 @@
 const { esc, formatearRut, tamanoLegible } = require('./utils');
-const { REQUISITOS, nombreRequisito } = require('./requisitos');
+const { REQUISITOS, requisitosDe, nombreRequisito } = require('./requisitos');
 const { formularioPersona, filasPersona, PLAZOS_CAMBIO, camposFaltantes } = require('./personas');
 const { faltaDireccion } = require('./publicacion');
 const { evaluarRenta, alertasAfp } = require('./evaluacionRenta');
@@ -9,12 +9,14 @@ const { fechaLegible } = require('./personas');
 const PLAZO_CORTO = { '5_dias': '5 días', '15_dias': '15 días', '1_mes': '1 mes', mas_1_mes: '+1 mes' };
 const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSemana, textoDias, esSabado } = require('./agenda');
 
-function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true } = {}) {
+function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true, marca = null } = {}) {
+  const capital = marca === 'capital';
   const menu = nav
     ? `<nav class="menu">${[
         ['leads', '/admin', 'Interesados'],
         ['calendario', '/admin/calendario', 'Calendario de visitas'],
         ['indicadores', '/admin/indicadores', 'Indicadores'],
+        ['ventas', '/admin/ventas', '🏢 SDO Capital · Ventas'],
       ]
         .map(([k, href, txt]) => `<a href="${href}" class="${nav === k ? 'activo' : ''}">${txt}</a>`)
         .join('')}<a href="/salir" class="salir">Salir</a></nav>`
@@ -35,14 +37,18 @@ function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = ''
 </head>
 <body>
 <header class="barra"><div class="contenedor ${ancho}">
-  <a class="logo" href="${nav ? '/admin' : '#'}"><img src="/static/logo.png?v=${VERSION}" alt="${esc(empresa)}" width="94" height="48"></a>
-  <span class="sub">${nav ? 'Panel comercial' : 'Área Comercial'}</span>
+  <a class="logo" href="${nav ? (capital ? '/admin/ventas' : '/admin') : '#'}">${
+    capital
+      ? `<img src="/static/logo-sdocapital.png?v=${VERSION}" alt="SDO Capital" width="90" height="48">`
+      : `<img src="/static/logo.png?v=${VERSION}" alt="${esc(empresa)}" width="94" height="48">`
+  }</a>
+  <span class="sub">${nav ? (capital ? 'Ventas' : 'Panel comercial') : capital ? 'Venta de departamentos' : 'Área Comercial'}</span>
   ${menu}
 </div></header>
 <main class="contenedor ${ancho}">
 ${cuerpo}
 </main>
-${pie ? `<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación de arriendo.</footer>` : ''}
+${pie ? `<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación${capital ? ' de compra' : ' de arriendo'}.</footer>` : ''}
 ${nav ? '<footer class="pie contenedor">SDO Comercial · Desarrollado por José Cano · Todos los derechos reservados</footer>' : ''}
 ${scripts.map((sc) => `<script src="${sc}?v=${VERSION}" defer></script>`).join('\n')}
 ${nav || titulo === 'Ingresar al panel' ? `<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {});</script>` : ''}
@@ -329,14 +335,14 @@ function fichaLead(lead) {
   const fila = (k, v) => (v ? `<tr><th>${k}</th><td>${esc(v)}</td></tr>` : '');
   return `<table class="ficha">
     ${filasPersona(lead).map(([k, v]) => fila(k, v)).join('')}
-    ${fila('Tipo', REQUISITOS[lead.tipo]?.etiqueta)}
+    ${fila(lead.negocio === 'venta' ? 'Forma de compra' : 'Tipo', requisitosDe(lead.tipo)?.etiqueta)}
     ${fila('Razón social', lead.razon_social)}
     ${fila('RUT empresa', lead.rut_empresa && formatearRut(lead.rut_empresa))}
     ${fila('Propiedad de interés', lead.propiedad)}
     ${faltaDireccion(lead.propiedad) ? '<tr><th></th><td><span class="aviso-dup">⚠️ Falta la dirección exacta (el interesado pegó el link). Revisa el aviso y escríbela abajo para que Julio la vea en el calendario.</span></td></tr>' : ''}
     ${mismaDireccion(lead) ? '<tr><th></th><td><span class="aviso-dup">⚠️ Es igual a su dirección actual: confirma con el interesado cuál propiedad quiere visitar y corrígela abajo.</span></td></tr>' : ''}
-    ${fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
-    ${lead.url_publicacion ? `<tr><th>Link de publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : '<tr><th>Link de publicación</th><td class="nota">No lo indicó</td></tr>'}
+    ${lead.negocio === 'venta' ? '' : fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
+    ${lead.url_publicacion ? `<tr><th>Link de publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : lead.propiedad_venta_id ? '' : '<tr><th>Link de publicación</th><td class="nota">No lo indicó</td></tr>'}
     ${fila('Origen', lead.portal)}
     ${fila('Comentarios', lead.comentarios)}
   </table>
@@ -363,6 +369,11 @@ const ETIQUETAS_ESTADO = {
   no_asistio: 'No asistió a la visita',
   no_continua: 'No continúa',
   cerrado: 'Cerrado',
+  // SDO Capital · Ventas
+  oferta: 'Hizo una oferta',
+  reservado: 'Reservó',
+  promesa: 'Promesa firmada',
+  escriturado: 'Escriturado (vendido)',
 };
 
 const RESULTADO_VISITA = {
@@ -518,7 +529,8 @@ function panel({ leads, todos, visitas, sinResultado = [], recordados = null, ho
 }
 
 function fichaAdmin({ lead, documentos, visita, revisionDocs = null, disponibles, firma, aviso, config }) {
-  const requisitos = REQUISITOS[lead.tipo]?.documentos || [];
+  const requisitos = requisitosDe(lead.tipo)?.documentos || [];
+  const venta = lead.negocio === 'venta';
   const grupos = requisitos.map((r, i) => ({ ...r, n: i + 1, docs: documentos.filter((d) => d.requisito === r.campo) }));
   const reqComp = lead.complementa ? (REQUISITOS[lead.comp_tipo]?.documentos || []).map((r) => ({ ...r, campo: `comp_${r.campo}` })) : [];
   const gruposComp = reqComp.map((r, i) => ({ ...r, n: i + 1, docs: documentos.filter((d) => d.requisito === r.campo) }));
@@ -530,7 +542,7 @@ function fichaAdmin({ lead, documentos, visita, revisionDocs = null, disponibles
 
   return layout(
     lead.nombre || 'Interesado',
-    `<p class="migas"><a href="/admin">← Interesados</a></p>
+    `<p class="migas">${venta ? '<a href="/admin/ventas">← SDO Capital · Ventas</a>' : '<a href="/admin">← Interesados</a>'}</p>
     ${aviso ? `<div class="alerta ok">${esc(aviso)}</div>` : ''}
     <section class="tarjeta">
       <div class="titulo-seccion">
@@ -550,6 +562,7 @@ function fichaAdmin({ lead, documentos, visita, revisionDocs = null, disponibles
           : `<form method="post" action="/admin/lead/${lead.id}/papelera" class="en-linea mover-papelera"><input type="hidden" name="accion" value="mover"><button class="boton chico" title="Ya no está interesado: sale de las listas de trabajo, sin borrar sus datos">🗑️ Mover a la papelera</button></form>`
       }
       ${fichaLead(lead)}
+      ${venta ? require('./vistasVentas').seccionesCompraFicha(lead, config) : ''}
       ${avisoDatosFaltantes(lead)}
       ${formPropiedad(lead, visita)}
       ${lead.mensaje_inicial ? `<p class="nota">Primer mensaje por WhatsApp: “${esc(lead.mensaje_inicial)}”</p>` : ''}
@@ -605,7 +618,7 @@ function fichaAdmin({ lead, documentos, visita, revisionDocs = null, disponibles
         <a class="boton peligro" href="/admin/lead/${lead.id}/eliminar">🗑️ Eliminar interesado</a>
       </div>
     </section>`,
-    opcPanel(config, 'leads')
+    venta ? { ...opcPanel(config, 'ventas'), marca: 'capital' } : opcPanel(config, 'leads')
   );
 }
 
@@ -748,7 +761,7 @@ function formularioDatos({ lead, valores: v, errores = [], config }) {
       ${errores.length ? `<div class="alerta error"><strong>Revisa lo siguiente:</strong><ul>${errores.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>` : ''}
       <form method="post" action="/datos/${esc(lead.token)}" id="form-postulacion" novalidate>
         <fieldset><legend>Tus datos</legend>${formularioPersona(v, '')}</fieldset>
-        <fieldset><legend>La propiedad que quieres arrendar</legend>${camposPropiedad(v)}</fieldset>
+        ${lead.negocio === 'venta' ? '' : `<fieldset><legend>La propiedad que quieres arrendar</legend>${camposPropiedad(v)}</fieldset>`}
         ${
           lead.complementa
             ? `<fieldset><legend>${lead.comp_rol === 'aval' ? 'Datos de tu aval' : 'Datos de quien complementa renta'}</legend>
@@ -761,7 +774,9 @@ function formularioDatos({ lead, valores: v, errores = [], config }) {
         <p id="estado-envio" class="nota" hidden>Guardando…</p>
       </form>
     </section>`,
-    { empresa: config.empresa.nombre, scripts: ['/static/postular.js'] }
+    lead.negocio === 'venta'
+      ? { empresa: config.venta.empresa, scripts: ['/static/postular.js'], marca: 'capital' }
+      : { empresa: config.empresa.nombre, scripts: ['/static/postular.js'] }
   );
 }
 
@@ -1100,7 +1115,7 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
         ? '<span class="res">✅ Confirmó</span>'
         : `<span class="res sin-confirmar">${sinConfirmar(v)}</span>`;
     return `<div class="visita ${estadoVisita(v)}" title="${v.origen === 'equipo' ? `Ingresada a mano (${esc(v.portal || 'Manual')})` : esc(v.portal || '')}">
-      <a class="nombre" href="/admin/lead/${v.lead_id}">${esc(v.nombre || 'Interesado')}</a>
+      <a class="nombre" href="/admin/lead/${v.lead_id}">${v.negocio === 'venta' ? '<span class="tag-venta" title="SDO Capital · Venta">🏢 Venta</span> ' : ''}${esc(v.nombre || 'Interesado')}</a>
       ${lugar}
       <a class="tel" href="tel:+${esc(v.telefono || '')}">📞 +${esc(v.telefono || '')}</a>
       ${estado}
@@ -1225,4 +1240,4 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   );
 }
 
-module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, resultadoVisita, formularioDatos, indicadores, confirmarEliminar, ingresar };
+module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, fechaHora, linkWhatsapp, casillaBreal, opcPanel, VERSION_ESTATICOS: () => VERSION, ACEPTA, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, resultadoVisita, formularioDatos, indicadores, confirmarEliminar, ingresar };
