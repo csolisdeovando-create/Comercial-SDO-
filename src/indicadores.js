@@ -45,6 +45,18 @@ function calcularIndicadores({ leads, visitas, desde, hasta, hoy }) {
     e.desdeInicio = pct(e.cantidad, etapas[0].cantidad);
   });
 
+  // Por campaña (links con ?origen=canal-campaña o anuncios de Instagram/Facebook)
+  const porCampana = new Map();
+  for (const l of cohorte.filter((x) => x.campana)) {
+    const k = `${l.portal || 'Sin origen'} · ${l.campana}`;
+    if (!porCampana.has(k)) porCampana.set(k, { campana: k, postularon: 0, aprobados: 0, visitaron: 0, continuan: 0 });
+    const f = porCampana.get(k);
+    f.postularon++;
+    if (l.aprobado_at) f.aprobados++;
+    if (visito(l)) f.visitaron++;
+    if (continua(l)) f.continuan++;
+  }
+
   const porPortal = new Map();
   for (const l of cohorte) {
     const p = l.portal || 'Sin origen';
@@ -108,6 +120,7 @@ function calcularIndicadores({ leads, visitas, desde, hasta, hoy }) {
     periodo: { desde, hasta },
     embudo: etapas,
     porPortal: [...porPortal.values()].sort((a, b) => b.postularon - a.postularon),
+    porCampana: [...porCampana.values()].sort((a, b) => b.postularon - a.postularon),
     actividad,
     motivosNoContinua: [...noContinua.entries()].map(([motivo, cantidad]) => ({ motivo, cantidad })).sort((a, b) => b.cantidad - a.cantidad),
     tiempos,
@@ -268,6 +281,7 @@ function calcularIndicadoresVenta({ leads, visitas, propiedades = [], desde, has
     porProposito: agrupar((l) => ({ vivir: 'Para vivir', invertir: 'Para invertir' })[l.para_que]),
     porFormaCompra: agrupar((l) => ({ credito: 'Crédito hipotecario', contado: 'Contado', subsidio: 'Subsidio', empresa: 'Empresa' })[l.tipo]),
     porPortal: agrupar((l) => l.portal),
+    porCampana: cohorte.some((l) => l.campana) ? agrupar((l) => (l.campana ? `${l.portal || 'Sin origen'} · ${l.campana}` : null)).filter((f) => f.grupo !== 'Sin dato') : [],
     porPropiedad: agrupar(propiedad),
     actividad,
     motivosNoContinua: [...noContinua.entries()].map(([motivo, cantidad]) => ({ motivo, cantidad })).sort((a, b) => b.cantidad - a.cantidad),

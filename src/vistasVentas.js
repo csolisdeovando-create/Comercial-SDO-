@@ -140,6 +140,8 @@ function formularioCompra({ lead, valores = {}, errores = [], propiedades = [], 
           </label>
         </fieldset>
 
+        ${vistas.campoOrigen(v)}
+
         <fieldset>
           <legend>Tu financiamiento</legend>
           <div class="grilla">
@@ -227,6 +229,7 @@ function panelVentas({ leads, todos, papelera, propiedades, visitas, filtros = {
       <div class="titulo-seccion"><div><h1>Panel de ventas</h1><span class="nota">Interesados en comprar departamentos. Las visitas usan el mismo calendario de Julio que arriendos, para que nunca se crucen.</span></div>
         <div class="acciones-ficha"><a class="boton chico" href="/admin/ventas/propiedades">🏢 Propiedades (${propiedades.filter((p) => p.estado === 'disponible').length} disponibles)</a><a class="boton chico" href="/admin/ventas/indicadores">📊 Indicadores</a></div></div>
       <p class="nota">Link del formulario de compra para compartir: <a href="${esc(config.baseUrl)}/comprar" target="_blank">${esc(config.baseUrl)}/comprar</a></p>
+      ${vistas.cajaLinksPorCanal(config, '/comprar')}
     </section>
     <section class="tarjeta">
       <div class="titulo-seccion" id="proximas"><div><h1>Próximas visitas</h1>${proximas.length ? `<span class="nota">${proximas.filter((v) => !v.breal_at).length ? `${proximas.filter((v) => !v.breal_at).length} por registrar en Breal` : '✅ Todas registradas en Breal'}</span>` : ''}</div><a class="boton chico" href="/admin/calendario?negocio=venta">Ver calendario</a></div>
@@ -399,7 +402,8 @@ function indicadoresVenta({ datos: d, periodo, config }) {
     ${tablaGrupo('¿Para vivir o invertir?', d.porProposito, 'Propósito')}
     ${tablaGrupo('Por forma de compra', d.porFormaCompra, 'Forma de compra')}
     ${tablaGrupo('Por propiedad', d.porPropiedad, 'Propiedad')}
-    ${tablaGrupo('Por portal de origen', d.porPortal, 'Portal')}
+    ${tablaGrupo('Por origen (portal, anuncio o canal)', d.porPortal, 'Origen')}
+    ${d.porCampana.length ? tablaGrupo('Por campaña', d.porCampana, 'Campaña') : ''}
     <section class="tarjeta">
       <h2>Actividad de visitas</h2>
       <table class="ficha">

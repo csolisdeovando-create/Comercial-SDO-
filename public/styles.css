@@ -478,3 +478,10 @@ form.mover-papelera { margin: 6px 0 10px; }
 .leyenda .ley-marca { font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 99px; color: #fff; }
 .leyenda .ley-marca.rent { background: #00a9b0; }
 .leyenda .ley-marca.capital { background: #3a5aa8; }
+
+/* Origen: "¿Dónde viste el aviso?" y links por canal */
+.opciones-origen { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.links-canal summary { cursor: pointer; font-weight: 600; }
+.links-canal .grilla { margin-top: 10px; }
+.links-canal input[readonly] { font-size: 12px; background: #f6f8fa; }
+.links-canal code { font-size: 12px; overflow-wrap: anywhere; }

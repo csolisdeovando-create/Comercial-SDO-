@@ -66,7 +66,7 @@ function formulario(campos, archivos) {
 }
 
 const PERSONALES = { doc_tipo: 'rut', nacionalidad: 'Chilena', fecha_nacimiento: '1990-05-10', estado_civil: 'Soltero/a', profesion: 'Ingeniero comercial', direccion_actual: 'Av. Providencia 1234, depto 51', comuna: 'Providencia' };
-const DATOS = { tipo: 'dependiente', nombre: 'Juan Pérez Soto', rut: '11.111.111-1', email: 'juan@example.com', telefono: '+56 9 8765 4321', consentimiento: '1', plazo_cambio: '15_dias', propiedad: 'Rosario Sur 91, depto 504, Las Condes', url_publicacion: 'https://www.sdorent.cl/propiedad/91', ...PERSONALES };
+const DATOS = { donde_vio: 'web', tipo: 'dependiente', nombre: 'Juan Pérez Soto', rut: '11.111.111-1', email: 'juan@example.com', telefono: '+56 9 8765 4321', consentimiento: '1', plazo_cambio: '15_dias', propiedad: 'Rosario Sur 91, depto 504, Las Condes', url_publicacion: 'https://www.sdorent.cl/propiedad/91', ...PERSONALES };
 const DOCS_DEP = [['cedula', 'cédula.pdf'], ['liquidaciones', 'liq1.pdf'], ['liquidaciones', 'liq2.pdf'], ['liquidaciones', 'liq3.pdf'], ['afp', 'afp.pdf'], ['dicom', 'dicom.pdf']];
 
 test('flujo completo de un lead', async (t) => {
@@ -1733,4 +1733,48 @@ test('SDO Rent y SDO Capital separados: selector arriba, menú e indicadores pro
   await fetch(`${ctx.url}/admin/visita/nueva`, { method: 'POST', headers: { ...h, cookie }, body: fd, redirect: 'manual' });
   assert.strictEqual(ctx.db.leadPorTelefono('56933332222').negocio, 'venta');
   assert.ok(lead);
+});
+
+test('origen: pregunta obligatoria, links por canal con campaña, anuncio de Meta por WhatsApp e indicadores por origen', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+
+  // La pregunta es obligatoria
+  let r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, donde_vio: '' }, DOCS_DEP) });
+  assert.strictEqual(r.status, 422);
+  assert.match(await r.text(), /Indica dónde viste el aviso/);
+
+  // Link por canal con campaña: queda marcado y se guarda aunque responda otra cosa
+  const form = await (await fetch(`${ctx.url}/postular?origen=meta-sanmiguel`)).text();
+  assert.match(form, /name="origen" value="meta-sanmiguel"/);
+  assert.match(form, /value="meta" required checked/);
+  r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, origen: 'meta-sanmiguel', donde_vio: 'meta' }, DOCS_DEP) });
+  assert.strictEqual(r.status, 200);
+  let lead = ctx.db.leadPorTelefono('56987654321');
+  assert.deepStrictEqual([lead.portal, lead.campana, lead.donde_vio], ['Anuncio Instagram/Facebook', 'sanmiguel', 'meta']);
+
+  // Sin link por canal y sin link del aviso: vale lo que respondió
+  r = await fetch(`${ctx.url}/postular`, { method: 'POST', body: formulario({ ...DATOS, telefono: '+56 9 1111 2222', rut: '22.222.222-2', email: 'b@example.com', donde_vio: 'mercadolibre' }, DOCS_DEP) });
+  assert.strictEqual(ctx.db.leadPorTelefono('56911112222').portal, 'Mercado Libre');
+
+  // Ficha, panel con los links por canal e indicadores por origen y campaña
+  const ficha = await (await fetch(`${ctx.url}/admin/lead/${lead.id}`, { headers: h })).text();
+  assert.match(ficha, /Campaña<\/th><td>sanmiguel/);
+  const panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.match(panel, /Links de postulación por canal/);
+  assert.match(panel, /\/postular\?origen=yapo/);
+  assert.match(await (await fetch(`${ctx.url}/admin/ventas`, { headers: h })).text(), /\/comprar\?origen=meta/);
+  const ind = await (await fetch(`${ctx.url}/admin/indicadores?desde=2026-01-01&hasta=2027-12-31`, { headers: h })).text();
+  assert.match(ind, /Por campaña/);
+  assert.match(ind, /Anuncio Instagram\/Facebook · sanmiguel/);
+
+  // WhatsApp desde un anuncio de Meta (clic a WhatsApp): Meta manda de qué anuncio viene
+  await postWebhook(ctx, {
+    object: 'whatsapp_business_account',
+    entry: [{ changes: [{ value: { contacts: [{ wa_id: '56926813993', profile: { name: 'Judite' } }], messages: [{ id: 'wamid.ad1', from: '56926813993', type: 'text', text: { body: '¿Qué requisitos piden para el arriendo de este departamento?' }, referral: { source_type: 'ad', source_id: '120210', headline: 'San Miguel 2D2B' } }] } }] }],
+  });
+  lead = ctx.db.leadPorTelefono('56926813993');
+  assert.deepStrictEqual([lead.portal, lead.campana], ['Anuncio Instagram/Facebook', 'San Miguel 2D2B']);
+  assert.match(ctx.wa.at(-1).texto, /\/postular\//);
 });

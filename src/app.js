@@ -8,6 +8,7 @@ const archiver = require('archiver');
 
 const { REQUISITOS, REQUISITOS_VENTA, FORMAS_COMPRA, TIPOS, PREFIJO_COMP, esComplemento, todosLosCampos, nombreRequisito } = require('./requisitos');
 const { crearValorUf } = require('./calificacion');
+const { ORIGENES, origenFinal } = require('./origen');
 const { construirCalendario, bloqueValido, ahoraEnZona, describirBloque, sumarDias, horasDe, esSabado } = require('./agenda');
 const { firmaValida, detectarPortal, extraerUrl } = require('./whatsapp');
 const { crearNotificaciones } = require('./notificaciones');
@@ -210,7 +211,9 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
 
     let lead = db.leadPorTelefono(telefono);
     if (lead && ['no_continua', 'cerrado'].includes(lead.estado)) lead = null;
-    const portal = detectarPortal(texto);
+    // Anuncio de Instagram/Facebook con botón de WhatsApp: viene "referral" con el título y el id del anuncio
+    const anuncio = msg.referral && (msg.referral.source_type === 'ad' || msg.referral.source_id) ? String(msg.referral.headline || `Anuncio ${msg.referral.source_id || ''}`).trim().slice(0, 120) : null;
+    const portal = anuncio ? 'Anuncio Instagram/Facebook' : detectarPortal(texto);
     const pub = interpretarUrl(extraerUrl(texto));
     const url_publicacion = pub?.url || null;
     const propiedad = resumenPropiedad(pub) || (portal ? texto.slice(0, 300) : null);
@@ -228,10 +231,12 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         url_publicacion,
         mensaje_inicial: texto.slice(0, 1000),
         negocio,
+        campana: anuncio,
       });
     } else if (lead.estado === 'contactado' && (portal || propiedad)) {
       // Nueva consulta por otra propiedad antes de postular: se actualiza el interés
       lead = db.actualizarLead(lead.id, {
+        ...(anuncio ? { campana: anuncio } : {}),
         portal: portal || pub?.portal || lead.portal,
         propiedad: propiedad || lead.propiedad,
         url_publicacion: url_publicacion || lead.url_publicacion,
@@ -316,6 +321,12 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     return errores;
   }
 
+  // Origen de la postulación: link por canal (?origen=), portal ya conocido, portal del aviso pegado o respuesta del formulario
+  const origenDePostulacion = (b, lead, pub) => {
+    const o = origenFinal({ param: b.origen, portalActual: lead.portal, portalAviso: pub?.portal && pub.portal !== 'SDO Rent' ? pub.portal : null, respuesta: b.donde_vio });
+    return { portal: o.portal, campana: o.campana || lead.campana || null, donde_vio: ORIGENES[b.donde_vio] ? b.donde_vio : null };
+  };
+
   function mostrarFormulario(req, res, lead) {
     if (lead?.negocio === 'venta') return res.redirect(`/comprar/${lead.token}`);
     if (lead && ['aprobado', 'agendado', 'no_asistio'].includes(lead.estado)) return res.redirect(`/agendar/${lead.token}`);
@@ -324,7 +335,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         vistas.mensaje('Documentos en revisión', 'Ya recibimos tus documentos y nuestro equipo los está revisando. Te avisaremos por correo y WhatsApp.', { ...opcVista, icono: '⏳' })
       );
     }
-    res.send(vistas.formularioPostulacion({ lead, config }));
+    res.send(vistas.formularioPostulacion({ lead, valores: { origen: String(req.query.origen || '').slice(0, 60) }, config }));
   }
 
   // El interesado completa los datos que faltan (link que le envía el equipo); no vuelve a subir documentos
@@ -404,6 +415,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       if (b.rut_empresa && !rutValido(b.rut_empresa)) errores.push('El RUT de la empresa no es válido.');
       const telefono = titular.telefono;
       if (!b.consentimiento) errores.push('Debes autorizar el uso de tus datos para evaluar la postulación.');
+      if (!ORIGENES[b.donde_vio]) errores.push('Indica dónde viste el aviso (Yapo, Mercado Libre, Instagram…).');
       if (tipo && !err) {
         for (const d of REQUISITOS[tipo].documentos) {
           if (!req.files?.[d.campo]?.length) errores.push(`Falta adjuntar: ${d.nombre}.`);
@@ -473,7 +485,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         propiedad: String(b.propiedad || '').trim().slice(0, 300) || resumenPropiedad(pub) || lead.propiedad,
         url_publicacion: pub?.url || lead.url_publicacion || null,
         plazo_cambio: plazoCambio,
-        portal: !lead.portal || lead.portal === 'Formulario web' ? pub?.portal || lead.portal : lead.portal,
+        ...origenDePostulacion(b, lead, pub),
         comentarios: String(b.comentarios || '').trim().slice(0, 2000) || null,
         complementa: complementa ? 1 : 0,
         comp_tipo: compTipo,
@@ -557,7 +569,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     if (lead && ['oferta', 'reservado', 'promesa', 'escriturado', 'visitado'].includes(lead.estado)) {
       return res.send(vistas.mensaje('Ya postulaste', 'Tu postulación ya está avanzada. Si necesitas algo, escríbenos por WhatsApp.', { ...opcVista, empresa: config.venta.empresa, marca: 'capital', icono: '👍' }));
     }
-    res.send(vistasVentas.formularioCompra({ lead, propiedades: db.listarPropiedadesVenta(), config }));
+    res.send(vistasVentas.formularioCompra({ lead, valores: { origen: String(req.query.origen || '').slice(0, 60) }, propiedades: db.listarPropiedadesVenta(), config }));
   }
   app.get('/comprar', (req, res) => mostrarFormularioCompra(req, res, null));
   app.get('/comprar/:token', (req, res) => {
@@ -609,6 +621,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
       if (tipo === 'empresa' && (!String(b.razon_social || '').trim() || !b.rut_empresa)) errores.push('Indica la razón social y el RUT de la empresa.');
       if (b.rut_empresa && !rutValido(b.rut_empresa)) errores.push('El RUT de la empresa no es válido.');
       if (!b.consentimiento) errores.push('Debes autorizar el uso de tus datos para evaluar la postulación.');
+      if (!ORIGENES[b.donde_vio]) errores.push('Indica dónde viste el aviso (Yapo, Mercado Libre, Instagram…).');
       if (tipo && !err) {
         for (const d of REQUISITOS_VENTA[tipo].documentos) {
           const opcional = tipo === 'subsidio' && d.campo === 'preaprobacion';
@@ -642,7 +655,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         propiedad_venta_id: propVenta ? propVenta.id : null,
         propiedad: propVenta ? [propVenta.direccion, propVenta.comuna].filter(Boolean).join(', ') : String(b.propiedad || '').trim().slice(0, 300),
         url_publicacion: propVenta ? propVenta.url_aviso || null : pub?.url || lead.url_publicacion || null,
-        portal: !lead.portal || lead.portal === 'Formulario web' ? pub?.portal || lead.portal : lead.portal,
+        ...origenDePostulacion(b, lead, pub),
         para_que: b.para_que,
         pie_uf: pieUf,
         renta_liquida: renta === null ? null : Math.round(renta),

@@ -2,6 +2,7 @@ const { esc, formatearRut, tamanoLegible } = require('./utils');
 const { REQUISITOS, requisitosDe, nombreRequisito } = require('./requisitos');
 const { formularioPersona, filasPersona, PLAZOS_CAMBIO, camposFaltantes } = require('./personas');
 const { faltaDireccion } = require('./publicacion');
+const { OPCIONES_DONDE_VIO, origenDesdeParam, claveDePortal, linksPorCanal } = require('./origen');
 const { evaluarRenta, alertasAfp } = require('./evaluacionRenta');
 const { MOTIVOS_NO_CONTINUA, resultadoBreal } = require('./notificaciones');
 const { fechaLegible } = require('./personas');
@@ -111,6 +112,28 @@ function camposPropiedad(v) {
           </div>`;
 }
 
+// "¿Dónde viste el aviso?" (obligatorio) + el origen del link por canal, que viaja oculto
+function campoOrigen(v) {
+  const marcado = v.donde_vio || claveDePortal(origenDesdeParam(v.origen)?.nombre || v.portal);
+  return `<fieldset>
+          <legend>¿Dónde viste el aviso?</legend>
+          <input type="hidden" name="origen" value="${esc(v.origen || '')}">
+          <div class="opciones-plazo opciones-origen">
+            ${OPCIONES_DONDE_VIO.map(([k, t]) => `<label class="opcion"><input type="radio" name="donde_vio" value="${k}" required ${marcado === k ? 'checked' : ''}><span>${esc(t)}</span></label>`).join('')}
+          </div>
+        </fieldset>`;
+}
+
+// Recuadro del panel con un link de postulación por canal (así cada postulación queda con su origen)
+function cajaLinksPorCanal(config, ruta) {
+  return `<details class="links-canal"><summary>🔗 Links de postulación por canal <small class="nota">(pégalos en el saludo de WhatsApp, los anuncios y los avisos: cada postulación queda con su origen)</small></summary>
+    <div class="grilla">${linksPorCanal(config.baseUrl, ruta)
+      .map((l) => `<label>${esc(l.nombre)}<input type="text" readonly value="${esc(l.url)}" onfocus="this.select()"></label>`)
+      .join('')}</div>
+    <p class="nota">Para medir una campaña específica agrega su nombre con un guion: <code>${esc(config.baseUrl)}${ruta}?origen=meta-sanmiguel</code></p>
+  </details>`;
+}
+
 function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
   const v = { ...lead, ...valores };
   if (!v.tipo) v.tipo = 'dependiente';
@@ -185,6 +208,8 @@ function formularioPostulacion({ lead, valores = {}, errores = [], config }) {
           <legend>La propiedad que quieres arrendar</legend>
           ${camposPropiedad(v)}
         </fieldset>
+
+        ${campoOrigen(v)}
 
         ${seccionDocs('dependiente')}
         ${seccionDocs('independiente')}
@@ -359,6 +384,8 @@ function fichaLead(lead) {
     ${lead.negocio === 'venta' ? '' : fila('Fecha de cambio', PLAZOS_CAMBIO[lead.plazo_cambio])}
     ${lead.url_publicacion ? `<tr><th>Link de publicación</th><td><a href="${esc(lead.url_publicacion)}" target="_blank" rel="noopener noreferrer">Ver aviso ↗</a></td></tr>` : lead.propiedad_venta_id ? '' : '<tr><th>Link de publicación</th><td class="nota">No lo indicó</td></tr>'}
     ${fila('Origen', lead.portal)}
+    ${fila('Dónde dijo que vio el aviso', OPCIONES_DONDE_VIO.find(([k]) => k === lead.donde_vio)?.[1])}
+    ${fila('Campaña', lead.campana)}
     ${fila('Comentarios', lead.comentarios)}
   </table>
   ${
@@ -504,6 +531,7 @@ function panel({ leads, todos, visitas, sinResultado = [], recordados = null, ho
           : '<p class="nota">No hay visitas agendadas.</p>'
       }
     </section>
+    <section class="tarjeta">${cajaLinksPorCanal(config, '/postular')}</section>
     <section class="tarjeta" id="interesados">
       <div class="titulo-seccion">
         <h1>Interesados</h1>
@@ -843,7 +871,7 @@ function indicadores({ datos: d, periodo, config }) {
       ${cifra(d.tiempos.diasDeAprobacionAVisita === null ? '—' : `${d.tiempos.diasDeAprobacionAVisita} días`, 'Aprobación → visita', 'mediana')}
     </section>
     <section class="tarjeta">
-      <h2>Por portal de origen</h2>
+      <h2>Por origen (portal, anuncio o canal)</h2>
       ${
         d.porPortal.length
           ? `<div class="tabla-scroll"><table class="tabla"><thead><tr><th>Portal</th><th>Postularon</th><th>Aprobados</th><th>Visitaron</th><th>Continúan</th><th>Conversión</th></tr></thead><tbody>
@@ -852,6 +880,13 @@ function indicadores({ datos: d, periodo, config }) {
           : '<p class="nota">No hubo postulaciones en el período.</p>'
       }
     </section>
+    ${
+      d.porCampana?.length
+        ? `<section class="tarjeta"><h2>Por campaña</h2><div class="tabla-scroll"><table class="tabla"><thead><tr><th>Campaña</th><th>Postularon</th><th>Aprobados</th><th>Visitaron</th><th>Continúan</th></tr></thead><tbody>
+        ${d.porCampana.map((f) => `<tr><td>${esc(f.campana)}</td><td>${f.postularon}</td><td>${f.aprobados}</td><td>${f.visitaron}</td><td>${f.continuan}</td></tr>`).join('')}
+        </tbody></table></div></section>`
+        : ''
+    }
     <section class="tarjeta">
       <h2>Actividad de visitas</h2>
       <table class="ficha">
@@ -1258,4 +1293,4 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
   );
 }
 
-module.exports = { ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, fechaHora, linkWhatsapp, casillaBreal, opcPanel, VERSION_ESTATICOS: () => VERSION, ACEPTA, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, resultadoVisita, formularioDatos, indicadores, confirmarEliminar, ingresar };
+module.exports = { campoOrigen, cajaLinksPorCanal, ETIQUETAS_ESTADO, RESULTADO_VISITA, layout, mensaje, fechaHora, linkWhatsapp, casillaBreal, opcPanel, VERSION_ESTATICOS: () => VERSION, ACEPTA, formularioPostulacion, calendario, revision, fichaLead, panel, fichaAdmin, calendarioPanel, nuevaVisita, resultadoVisita, formularioDatos, indicadores, confirmarEliminar, ingresar };

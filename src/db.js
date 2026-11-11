@@ -145,6 +145,9 @@ function migrar(db) {
   if (!leads.includes('datos_pedidos_at')) db.exec('ALTER TABLE leads ADD COLUMN datos_pedidos_at TEXT');
   if (!leads.includes('rechazado_at')) db.exec('ALTER TABLE leads ADD COLUMN rechazado_at TEXT');
   if (!columnas('propiedades_venta').includes('pie_minimo')) db.exec('ALTER TABLE propiedades_venta ADD COLUMN pie_minimo REAL');
+  // Origen: lo que respondió en "¿Dónde viste el aviso?" y la campaña (link por canal o anuncio de Meta)
+  if (!leads.includes('donde_vio')) db.exec('ALTER TABLE leads ADD COLUMN donde_vio TEXT');
+  if (!leads.includes('campana')) db.exec('ALTER TABLE leads ADD COLUMN campana TEXT');
   // SDO Capital · Ventas: tipo de negocio, datos de compra y negociación (oferta → reserva → promesa → escritura)
   for (const col of [
     "negocio TEXT DEFAULT 'arriendo'", 'para_que TEXT', 'pie_uf REAL', 'renta_liquida INTEGER', 'banco_preaprobacion TEXT', 'monto_preaprobado_uf REAL',
