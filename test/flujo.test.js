@@ -1778,3 +1778,19 @@ test('origen: pregunta obligatoria, links por canal con campaña, anuncio de Met
   assert.deepStrictEqual([lead.portal, lead.campana], ['Anuncio Instagram/Facebook', 'San Miguel 2D2B']);
   assert.match(ctx.wa.at(-1).texto, /\/postular\//);
 });
+
+test('SDO Capital · Ventas: el aviso de Portal Inmobiliario se reconoce por su código MLC aunque el link llegue distinto', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  await fetch(`${ctx.url}/admin/ventas/propiedades`, {
+    method: 'POST', headers: h, redirect: 'manual',
+    body: new URLSearchParams({ direccion: 'Trinidad Ramírez 180, piso 10 oriente', precio_uf: '1400', url_aviso: 'https://www.portalinmobiliario.com/MLC-2416469263-departamento-1d1b-piso-10-oriente-en-trinidad-ramirez-180-_JM', estado: 'disponible' }),
+  });
+  // El portal manda otro formato de link (con el código sin guion), sin decir "venta"
+  await postWebhook(ctx, mensajeWA('wamid.pi1', '56977778888', 'Hola, me interesa este aviso https://departamento.portalinmobiliario.com/MLC2416469263 ¿sigue disponible?', 'Carla'));
+  const lead = ctx.db.leadPorTelefono('56977778888');
+  assert.strictEqual(lead.negocio, 'venta');
+  assert.match(lead.propiedad, /Trinidad Ramírez 180/);
+  assert.match(ctx.wa.at(-1).texto, new RegExp(`/comprar/${lead.token}`));
+});

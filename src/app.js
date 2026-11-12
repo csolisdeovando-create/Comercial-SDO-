@@ -219,8 +219,13 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     const propiedad = resumenPropiedad(pub) || (portal ? texto.slice(0, 300) : null);
     if (!lead) {
       // ¿Viene de un aviso de venta? (link de una propiedad del listado o el mensaje habla de comprar)
+      // Se reconoce por el link o por el código del aviso (MLC-123… en Mercado Libre / Portal Inmobiliario, aunque el link llegue con otro formato)
       const sinParametros = (u) => String(u || '').split(/[?#]/)[0].replace(/\/$/, '').toLowerCase();
-      const propVenta = url_publicacion ? db.listarPropiedadesVenta().find((p) => p.url_aviso && sinParametros(p.url_aviso) === sinParametros(url_publicacion)) : null;
+      const codigoAviso = (t) => (String(t || '').match(/MLC-?(\d{6,})/i) || [])[1] || null;
+      const codigoMensaje = codigoAviso(texto);
+      const propVenta = db.listarPropiedadesVenta().find(
+        (p) => p.url_aviso && ((url_publicacion && sinParametros(p.url_aviso) === sinParametros(url_publicacion)) || (codigoMensaje && codigoAviso(p.url_aviso) === codigoMensaje))
+      ) || null;
       const negocio = propVenta || /\b(venta|vendo|vende|vender|comprar|compra)\b/i.test(texto) ? 'venta' : 'arriendo';
       lead = db.crearLead({
         telefono,
