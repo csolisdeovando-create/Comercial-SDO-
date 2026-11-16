@@ -1,4 +1,4 @@
-// SDO Comercial · Desarrollado por José Cano · Todos los derechos reservados (ver LICENSE)
+// SDO Comercial · Propiedad de S&V SpA · Desarrollado por José Cano (ver LICENSE)
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');

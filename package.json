@@ -18,7 +18,7 @@
     "type": "git",
     "url": "git+https://github.com/josecano-app/Comercial-SDO-.git"
   },
-  "author": "José Cano",
+  "author": "José Cano (desarrollo) · S&V SpA (propiedad)",
   "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "@anthropic-ai/sdk": "^1.1.0",

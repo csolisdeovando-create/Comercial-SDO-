@@ -1,4 +1,4 @@
-// SDO Comercial · Desarrollado por José Cano · Todos los derechos reservados (ver LICENSE)
+// SDO Comercial · Propiedad de S&V SpA · Desarrollado por José Cano (ver LICENSE)
 const path = require('node:path');
 const { cargarConfig } = require('./config');
 const { abrirDB } = require('./db');

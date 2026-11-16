@@ -65,7 +65,7 @@ ${selector}
 ${cuerpo}
 </main>
 ${pie ? `<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación${capital ? ' de compra' : ' de arriendo'}.</footer>` : ''}
-${nav ? `<footer class="pie contenedor">${capital ? 'SDO Capital · Ventas' : 'SDO Rent · Arriendos'} · SDO Comercial · Desarrollado por José Cano · Todos los derechos reservados</footer>` : ''}
+${nav ? `<footer class="pie contenedor">${capital ? 'SDO Capital · Ventas' : 'SDO Rent · Arriendos'} · Propiedad de S&amp;V SpA · Desarrollado por José Cano</footer>` : ''}
 ${scripts.map((sc) => `<script src="${sc}?v=${VERSION}" defer></script>`).join('\n')}
 ${nav || titulo === 'Ingresar al panel' ? `<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () {});</script>` : ''}
 </body>
