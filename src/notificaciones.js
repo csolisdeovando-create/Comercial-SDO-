@@ -527,6 +527,22 @@ function crearNotificaciones({ config, mailer, whatsapp, db }) {
       );
     },
 
+    // Reenvío de la invitación de una visita al equipo (mismo evento: si ya lo tenían, solo se actualiza)
+    async reenvioInvitacion(lead, visita) {
+      const cuando = describirBloque(visita.fecha, visita.hora);
+      await mailer.enviar({
+        to: destinatarios(visita.fecha),
+        subject: `📅 Visita (reenvío de invitación): ${cuando} · ${lead.propiedad || 'propiedad por confirmar'} · ${lead.nombre}`,
+        html: correoHTML(
+          'Invitación de visita',
+          `<p style="font-size:18px">🗓️ <strong>${esc(cuando)}</strong></p>
+           <p>Te reenviamos esta visita para que quede en tu calendario. Si ya la tenías, solo se actualiza.</p>${tablaLead(lead)}
+           <p>${boton('Ver ficha', `${config.baseUrl}/admin/lead/${lead.id}`, '#111417')}</p>`
+        ),
+        icalEvent: { method: 'REQUEST', filename: 'visita.ics', content: this.eventoEquipo(lead, visita) },
+      });
+    },
+
     // El equipo le pide al interesado que confirme (botón en el calendario o la ficha)
     async pedirConfirmacion(lead, visita) {
       const cuando = describirBloque(visita.fecha, visita.hora);

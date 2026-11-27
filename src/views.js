@@ -10,7 +10,12 @@ const { fechaLegible } = require('./personas');
 const PLAZO_CORTO = { '5_dias': '5 días', '15_dias': '15 días', '1_mes': '1 mes', mas_1_mes: '+1 mes' };
 const { fechaLarga, horaTexto, describirBloque, sumarDias, horasDe, columnasSemana, textoDias, esSabado } = require('./agenda');
 
-function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true, marca = null } = {}) {
+function layout(titulo, cuerpo, { empresa = 'SDO Rent', scripts = [], ancho = '', nav = null, pie = true, marca = null, estadoCorreo = null } = {}) {
+  // Los correos están fallando (el último envío falló y no ha salido ninguno después)
+  const fallaCorreo =
+    nav && estadoCorreo?.ultimoError && (!estadoCorreo.ultimoOk || estadoCorreo.ultimoError > estadoCorreo.ultimoOk)
+      ? `<div class="alerta error falla-correo">⚠️ <strong>Los correos no están saliendo</strong> (último intento fallido: ${esc(fechaHora(estadoCorreo.ultimoError))}). Al equipo no le llegan las visitas a Google Calendar ni a los interesados sus avisos. Revisa la clave del correo (<code>SMTP_PASS</code>) en Render. <small>${esc(estadoCorreo.mensaje || '')}</small></div>`
+      : '';
   const capital = marca === 'capital';
   // Cada negocio tiene su propio menú; el selector de arriba cambia entre SDO Rent (arriendos) y SDO Capital (ventas)
   const opciones = capital
@@ -62,7 +67,7 @@ ${selector}
   ${menu}
 </div></header>
 <main class="contenedor ${ancho}">
-${cuerpo}
+${fallaCorreo}${cuerpo}
 </main>
 ${pie ? `<footer class="pie contenedor">${esc(empresa)} · Tus datos se usan solo para evaluar tu postulación${capital ? ' de compra' : ' de arriendo'}.</footer>` : ''}
 ${nav ? `<footer class="pie contenedor">${capital ? 'SDO Capital · Ventas' : 'SDO Rent · Arriendos'} · Propiedad de S&amp;V SpA · Desarrollado por José Cano</footer>` : ''}
@@ -445,7 +450,7 @@ const casillaBreal = (v) =>
     <button class="casilla-breal ${v.breal_at ? 'hecha' : ''}" title="${v.breal_at ? `Registrada en Breal el ${esc(fechaHora(v.breal_at))}. Toca para desmarcar` : 'Marcar como registrada en Breal'}" aria-pressed="${v.breal_at ? 'true' : 'false'}">${v.breal_at ? '☑' : '☐'}<span> Registrado en Breal</span></button>
   </form>`;
 
-const opcPanel = (config, nav) => ({ empresa: config.empresa.nombre, ancho: 'ancho', nav, pie: false });
+const opcPanel = (config, nav) => ({ empresa: config.empresa.nombre, ancho: 'ancho', nav, pie: false, estadoCorreo: config.estadoCorreo || null });
 const linkWhatsapp = (tel) => (tel ? `<a href="https://wa.me/${esc(tel)}" target="_blank">+${esc(tel)}</a>` : '—');
 const bloqueDeVisita = (v) => describirBloque(...v.split(' ').map((x, i) => (i ? Number(x) : x)));
 
@@ -1115,7 +1120,7 @@ function nuevaVisita({ valores: v, errores, conflicto, cruces = [], existente, o
   );
 }
 
-function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], proximas, nueva = null, config, marca = null }) {
+function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], proximas, nueva = null, config, marca = null, reenvio = null, correoFallo = false }) {
   const cols = columnasSemana(config.agenda);
   const dias = cols.map((d) => sumarDias(lunes, d - 1));
   // Horas del horario normal + las que se pueden abrir el sábado + las de visitas ingresadas a mano fuera de horario
@@ -1259,11 +1264,20 @@ function calendarioPanel({ lunes, hoy, desplazamiento, visitas, bloqueos = [], p
 
   return layout(
     'Calendario de visitas',
-    `${nueva ? `<div class="alerta ok">✅ Visita de <strong>${esc(nueva.nombre || '')}</strong> ingresada. Se avisó al equipo y se agregó a su calendario. <a href="/admin/lead/${nueva.id}">Ver ficha</a></div>` : ''}
+    `${
+      reenvio
+        ? reenvio.fallidas
+          ? `<div class="alerta error">⚠️ No se pudieron reenviar ${reenvio.fallidas} invitación(es)${reenvio.enviadas ? ` (sí salieron ${reenvio.enviadas})` : ''}. Revisa la clave del correo en Render.</div>`
+          : `<div class="alerta ok">📨 Se reenviaron ${reenvio.enviadas} invitación(es) al calendario del equipo.</div>`
+        : ''
+    }${correoFallo ? '<div class="alerta error">⚠️ No se pudo enviar el correo para pedir confirmación. No quedó marcado como pedido.</div>' : ''}${nueva ? `<div class="alerta ok">✅ Visita de <strong>${esc(nueva.nombre || '')}</strong> ingresada. Se avisó al equipo y se agregó a su calendario. <a href="/admin/lead/${nueva.id}">Ver ficha</a></div>` : ''}
     <section class="tarjeta">
       <div class="titulo-seccion">
         <div><h1>Calendario de visitas</h1><span class="nota">${total ? `${total} visita(s) esta semana` : 'Sin visitas esta semana'}</span></div>
-        <a class="boton primario" href="/admin/visita/nueva">＋ Ingresar visita</a>
+        <div class="acciones-ficha">
+          <form method="post" action="/admin/visitas/reenviar-invitaciones" class="en-linea"><input type="hidden" name="semana" value="${desplazamiento}"><button class="boton" title="Vuelve a mandar al equipo las invitaciones de todas las próximas visitas, para que queden en su Google Calendar">📨 Reenviar invitaciones al equipo</button></form>
+          <a class="boton primario" href="/admin/visita/nueva">＋ Ingresar visita</a>
+        </div>
       </div>
       <div class="nav-semanas compacto">
         <a class="boton" href="/admin/calendario?semana=${desplazamiento - 1}" aria-label="Semana anterior">‹</a>

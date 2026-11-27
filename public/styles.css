@@ -485,3 +485,7 @@ form.mover-papelera { margin: 6px 0 10px; }
 .links-canal .grilla { margin-top: 10px; }
 .links-canal input[readonly] { font-size: 12px; background: #f6f8fa; }
 .links-canal code { font-size: 12px; overflow-wrap: anywhere; }
+
+/* Aviso cuando los correos no están saliendo */
+.falla-correo { margin-top: 12px; }
+.falla-correo small { display: block; margin-top: 4px; opacity: .8; }

@@ -19,9 +19,11 @@ function preparar(envExtra = {}, { whatsappConfigurado = true, ahoraFn = () => A
   const db = abrirDB(':memory:');
   const correos = [];
   const wa = [];
+  let correoCaido = false;
   const mailer = {
     modoPrueba: true,
     async enviar(m) {
+      if (correoCaido) throw new Error('535 Username and Password not accepted');
       // consume los streams de adjuntos para no dejar archivos abiertos
       for (const a of m.attachments || []) if (a.content?.pipe) for await (const _ of a.content);
       correos.push(m);
@@ -38,7 +40,7 @@ function preparar(envExtra = {}, { whatsappConfigurado = true, ahoraFn = () => A
     const server = app.listen(0, () => {
       const url = `http://127.0.0.1:${server.address().port}`;
       config.baseUrl = url;
-      resolve({ app, server, url, db, config, correos, wa });
+      resolve({ app, server, url, db, config, correos, wa, fallarCorreo: (x) => { correoCaido = x; } });
     });
   });
 }
@@ -1793,4 +1795,39 @@ test('SDO Capital · Ventas: el aviso de Portal Inmobiliario se reconoce por su 
   assert.strictEqual(lead.negocio, 'venta');
   assert.match(lead.propiedad, /Trinidad Ramírez 180/);
   assert.match(ctx.wa.at(-1).texto, new RegExp(`/comprar/${lead.token}`));
+});
+
+test('correos caídos: el panel avisa, «pedir confirmación» no queda marcado y se pueden reenviar las invitaciones al equipo', async (t) => {
+  const ctx = await preparar();
+  t.after(() => ctx.server.close());
+  const h = { authorization: `Basic ${Buffer.from('admin:clave').toString('base64')}`, origin: ctx.url };
+  const post = (ruta, datos) => fetch(ctx.url + ruta, { method: 'POST', headers: h, body: new URLSearchParams(datos), redirect: 'manual' });
+  const lead = ctx.db.crearLead({ telefono: '56931311855', nombre: 'Oscar Fuentealba', email: 'oscar@example.com', propiedad: 'Carlos Silva Vildósola 870', estado: 'agendado' });
+  const v = ctx.db.crearVisita(lead.id, '2026-10-16', 13);
+
+  // El correo deja de funcionar (clave vencida)
+  const enviarOriginal = ctx.app.locals.mailerParaPruebas;
+  ctx.fallarCorreo(true);
+  let r = await post(`/admin/visita/${v.id}/pedir-confirmacion`, {});
+  assert.match(r.headers.get('location'), /ok=correo_fallo/);
+  assert.strictEqual(ctx.db.visitaPorId(v.id).confirmacion_pedida_at, null, 'no queda como pedida');
+  let panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.match(panel, /Los correos no están saliendo/);
+  r = await post('/admin/visitas/reenviar-invitaciones', { semana: '0' });
+  assert.match(r.headers.get('location'), /reenviadas=0&fallidas=1/);
+
+  // Se arregla la clave: se reenvían las invitaciones y el aviso desaparece
+  ctx.fallarCorreo(false);
+  const antes = ctx.correos.length;
+  r = await post('/admin/visitas/reenviar-invitaciones', { semana: '0' });
+  assert.match(r.headers.get('location'), /reenviadas=1&fallidas=0/);
+  const reenvio = ctx.correos.slice(antes).find((c) => /reenvío de invitación/.test(c.subject));
+  assert.match(reenvio.icalEvent.content.replace(/\r\n /g, ''), /SUMMARY:🏠 Carlos Silva Vildósola 870 · Oscar Fuentealba/);
+  assert.ok(reenvio.to.includes('julio.mendoza@sdorent.cl'));
+  const cal = await (await fetch(`${ctx.url}/admin/calendario?reenviadas=1&fallidas=0`, { headers: h })).text();
+  assert.match(cal, /Se reenviaron 1 invitación/);
+  assert.match(cal, /📨 Reenviar invitaciones al equipo/);
+  panel = await (await fetch(`${ctx.url}/admin`, { headers: h })).text();
+  assert.doesNotMatch(panel, /Los correos no están saliendo/);
+  assert.strictEqual(enviarOriginal, undefined);
 });

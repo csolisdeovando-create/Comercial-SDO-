@@ -27,7 +27,24 @@ const EXT_PERMITIDAS = /\.(pdf|jpe?g|png|webp|heic|heif)$/i;
 
 function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lector = null, fetchAfp = fetch }) {
   const app = express();
-  const notif = crearNotificaciones({ config, mailer, whatsapp, db });
+  // Estado de los envíos: si los correos dejan de salir (clave del correo vencida), el panel lo avisa
+  const estadoCorreo = { ultimoOk: null, ultimoError: null, mensaje: null };
+  config.estadoCorreo = estadoCorreo;
+  const mailerVigilado = {
+    ...mailer,
+    async enviar(m) {
+      try {
+        const r = await mailer.enviar(m);
+        estadoCorreo.ultimoOk = new Date().toISOString();
+        return r;
+      } catch (e) {
+        estadoCorreo.ultimoError = new Date().toISOString();
+        estadoCorreo.mensaje = String(e?.message || e).slice(0, 200);
+        throw e;
+      }
+    },
+  };
+  const notif = crearNotificaciones({ config, mailer: mailerVigilado, whatsapp, db });
   // Los sábados se agregan las horas que el equipo habilita en el calendario del panel
   const cfgAgenda = { ...config.agenda, zonaHoraria: config.zonaHoraria, horasExtra: (fecha) => db.horasHabilitadas(fecha) };
   const configVista = { ...config, agenda: cfgAgenda };
@@ -1247,6 +1264,25 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     res.set('Cache-Control', 'no-store').json({ generado: new Date().toISOString(), ...datos });
   });
 
+  // Reenvía al equipo las invitaciones de calendario de todas las próximas visitas (por ejemplo, si los correos fallaron)
+  app.post('/admin/visitas/reenviar-invitaciones', formAdmin, async (req, res) => {
+    const proximas = db.listarVisitas(hoyChile()).filter((v) => !v.resultado);
+    let enviadas = 0;
+    let fallidas = 0;
+    for (const v of proximas) {
+      const lead = db.leadPorId(v.lead_id);
+      try {
+        await notif.reenvioInvitacion(lead, db.visitaPorId(v.id));
+        enviadas++;
+      } catch (e) {
+        console.error('[panel] reenviar invitación:', e.message);
+        fallidas++;
+      }
+    }
+    const semana = parseInt(req.body?.semana, 10) || 0;
+    res.redirect(303, `/admin/calendario?semana=${semana}&reenviadas=${enviadas}&fallidas=${fallidas}`);
+  });
+
   app.get('/admin/calendario', (req, res) => {
     const negocio = ['venta', 'arriendo'].includes(req.query.negocio) ? req.query.negocio : negocioVista(req);
     recordarNegocio(res, negocio);
@@ -1266,6 +1302,8 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
         nueva,
         config: configVista,
         marca: negocio === 'venta' ? 'capital' : null,
+        reenvio: req.query.reenviadas !== undefined ? { enviadas: Number(req.query.reenviadas) || 0, fallidas: Number(req.query.fallidas) || 0 } : null,
+        correoFallo: req.query.ok === 'correo_fallo',
       })
     );
   });
@@ -1551,6 +1589,7 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     negociacion: 'Negociación registrada.',
     confirmada_equipo: 'Visita confirmada. Se le avisó al interesado y se actualizó el calendario del equipo.',
     sin_correo: 'El interesado no tiene correo: confírmale por teléfono o WhatsApp y usa «Confirmar visita».',
+    correo_fallo: 'No se pudo enviar el correo (revisa la clave del correo en Render). No quedó marcado como pedido.',
     datos_pedidos: 'Le enviamos al interesado el link para que complete sus datos.',
     cancelada: 'Visita cancelada. El horario quedó libre.',
     cancelada_aviso: 'Visita cancelada. Le enviamos al interesado el link para elegir otro horario.',
@@ -1620,11 +1659,19 @@ function crearApp({ config, db, mailer, whatsapp, ahora = () => new Date(), lect
     const visita = visitaPorConfirmar(req.params.id);
     if (!visita) return res.redirect(303, '/admin/calendario');
     const lead = db.leadPorId(visita.lead_id);
+    // Solo queda como "pedida" si el correo realmente salió
+    let resultado = lead?.email ? 'confirmacion_pedida' : 'sin_correo';
     if (lead?.email) {
-      await notif.pedirConfirmacion(lead, visita).catch((e) => console.error('[panel] pedir confirmación:', e));
-      db.marcarConfirmacionPedida(visita.id);
+      try {
+        await notif.pedirConfirmacion(lead, visita);
+        db.marcarConfirmacionPedida(visita.id);
+      } catch (e) {
+        console.error('[panel] pedir confirmación:', e);
+        resultado = 'correo_fallo';
+      }
     }
-    res.redirect(303, `${volverVisita(req, visita)}${req.body?.volver === 'calendario' ? '' : `?ok=${lead?.email ? 'confirmacion_pedida' : 'sin_correo'}#visita`}`);
+    if (req.body?.volver === 'calendario') return res.redirect(303, `${volverVisita(req, visita)}${resultado === 'correo_fallo' ? '&ok=correo_fallo' : ''}`);
+    res.redirect(303, `${volverVisita(req, visita)}?ok=${resultado}#visita`);
   });
   app.post('/admin/visita/:id/confirmar', formAdmin, async (req, res) => {
     const visita = visitaPorConfirmar(req.params.id);
